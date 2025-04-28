@@ -1,6 +1,6 @@
-# mengo
-Mengo Programing Language
+# Mengo Programing Language
 
+```ebnf
 program        = { line } ;
 
 line           = [ indent ] ( command | comment ) newline ;
@@ -85,3 +85,4 @@ character      = ? qualquer caractere exceto '"' ? ;
 character_except_newline = ? qualquer caractere exceto "\n" ? ;
 
 newline        = "\n" ;
+```
