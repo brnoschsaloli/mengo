@@ -1,0 +1,29 @@
+` Programa que lê números, armazena numa lista, e mostra se são pares ou ímpares
+
+input n
+list numeros
+set i 0
+
+label ler_numeros
+if i less n
+    input temp
+    insert temp numeros
+    add i 1 i
+    goto ler_numeros
+
+set j 0
+
+label verificar_lista
+if j less n
+    in j numeros atual
+    mod atual 2 resto
+    if resto equal 0
+        print "Número par:"
+        print atual
+    if resto notequal 0
+        print "Número ímpar:"
+        print atual
+    add j 1 j
+    goto verificar_lista
+
+exit
