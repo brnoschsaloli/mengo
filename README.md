@@ -1,6 +1,3 @@
-# mengo
-Mengo Programing Language
-
 program        = { line } ;
 
 line           = [ indent ] ( command | comment ) newline ;
@@ -26,7 +23,12 @@ command        = assignment
 
 assignment     = "set" identifier value ;
 
-math_operation = ("add" | "sub" | "mul" | "div" | "mod") identifier identifier identifier ;
+math_operation = add_sub_mul_div
+               | mod_operation ;
+
+add_sub_mul_div = ("add" | "sub" | "mul" | "div") identifier identifier identifier ;
+
+mod_operation = "mod" identifier ( identifier identifier | identifier ) ;
 
 logical_operation = ("and" | "or") identifier identifier identifier
                   | "not" identifier identifier ;
