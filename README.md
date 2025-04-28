@@ -1,3 +1,6 @@
+# mengo
+Mengo Programing Language
+
 program        = { line } ;
 
 line           = [ indent ] ( command | comment ) newline ;
