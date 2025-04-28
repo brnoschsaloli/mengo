@@ -26,12 +26,13 @@ command        = assignment
 
 assignment     = "set" identifier value ;
 
-math_operation = add_sub_mul_div
+math_operation = add_sub_mul_div_pow
                | mod_operation ;
 
-add_sub_mul_div = ("add" | "sub" | "mul" | "div") identifier identifier identifier ;
+add_sub_mul_div_pow = ("add" | "sub" | "mul" | "div" | "pow") identifier identifier identifier ;
 
 mod_operation = "mod" identifier ( identifier identifier | identifier ) ;
+
 
 logical_operation = ("and" | "or") identifier identifier identifier
                   | "not" identifier identifier ;
