@@ -29,13 +29,13 @@ assignment     = "set" identifier value ;
 math_operation = add_sub_mul_div_pow
                | mod_operation ;
 
-add_sub_mul_div_pow = ("add" | "sub" | "mul" | "div" | "pow") identifier identifier identifier ;
+add_sub_mul_div_pow = ("add" | "sub" | "mul" | "div" | "pow") identifier value value ;
 
-mod_operation = "mod" identifier ( identifier identifier | identifier ) ;
+mod_operation = "mod" identifier ( value value | value ) ;
 
 
-logical_operation = ("and" | "or") identifier identifier identifier
-                  | "not" identifier identifier ;
+logical_operation = ("and" | "or") identifier value value
+                  | "not" identifier value ;
 
 condition      = "if" comparison ;
 
@@ -56,7 +56,7 @@ exit_command   = "exit" ;
 
 input_command  = "input" identifier ;
 
-print_command  = "print" identifier ;
+print_command  = "print" value ;
 
 bin_command    = "bin" identifier identifier ;
 
