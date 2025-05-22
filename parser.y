@@ -116,8 +116,8 @@ math_operation:
         free($2); free($3);
     }
   | MOD IDENTIFIER value value{
-        printf("Math op mod: %s % %s \n", $2, $3);
-        free($2); free($3);
+        printf("Math op mod: %s %s %s\n", $2, $3, $4);
+        free($2); free($3); free($4);
     }
   ;
 

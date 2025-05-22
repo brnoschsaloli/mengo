@@ -17,10 +17,10 @@ static char *copyString(const char *s) {
 
 %%
 
-"\t"                    { return INDENT; }
+^[ ]+                   { return INDENT; }
 "\n"                    { yylineno++; return NEWLINE; }
 "`"[^\n]*               { yylval.sval = copyString(yytext); return COMMENT; }
-[ \r]+                  { /* ignora espaços e carriage return */ }
+[ \t\r]+                { /* ignora espaços e carriage return */ }
 
 "set"                   { return SET; }
 "add"                   { return ADD; }
@@ -54,6 +54,9 @@ static char *copyString(const char *s) {
 "insert"                { return INSERT; }
 "delete"                { return DELETE; }
 "in"                    { return IN; }
+
+"true"                  { return TRUE; }
+"false"                 { return FALSE; }
 
 [-]?[0-9]+(\.[0-9]+)?    { yylval.dval = atof(yytext); return NUMBER; }
 \"([^\"\n])*\"          { yylval.sval = copyString(yytext); return STRING; }

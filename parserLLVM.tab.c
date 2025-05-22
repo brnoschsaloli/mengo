@@ -67,21 +67,94 @@
 
 
 /* First part of user prologue.  */
-#line 2 "parser.y"
+#line 2 "parserLLVM.y"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "parser.tab.h"
+#include <llvm-c/Core.h>
+#include <llvm-c/Support.h>
+#include <llvm-c/ExecutionEngine.h>
+#include <llvm-c/Target.h>
+#include <llvm-c/Analysis.h>
+#include <llvm-c/BitWriter.h>
+#include "parserLLVM.tab.h"
 
-/* yylineno é atualizado pelo Flex */
+/* yylineno is updated by Flex */
 extern int yylineno;
 
+/* LLVM globals */
+LLVMContextRef context;
+LLVMModuleRef module;
+LLVMBuilderRef builder;
+LLVMValueRef main_func; /* Main function for code generation */
+
+/* Simple symbol table to store variable mappings */
+struct Symbol {
+    char *name;
+    LLVMValueRef value;
+};
+struct Symbol symbol_table[100]; /* Adjust size as needed */
+int symbol_count = 0;
+
+/* Find or create a variable in the symbol table */
+LLVMValueRef find_or_create_variable(const char *name) {
+    for (int i = 0; i < symbol_count; i++) {
+        if (strcmp(symbol_table[i].name, name) == 0) {
+            return symbol_table[i].value;
+        }
+    }
+    /* Create new global variable */
+    LLVMValueRef var = LLVMAddGlobal(module, LLVMDoubleTypeInContext(context), name);
+    LLVMSetInitializer(var, LLVMConstReal(LLVMDoubleTypeInContext(context), 0.0));
+    symbol_table[symbol_count].name = strdup(name);
+    symbol_table[symbol_count].value = var;
+    symbol_count++;
+    return var;
+}
+
+#define MAX_LABELS 100
+static LLVMBasicBlockRef if_then_bb;
+static LLVMBasicBlockRef if_merge_bb;
+static int exit_cont = 0;
+static int cont_count = 0;
+static char*   label_names[MAX_LABELS];
+static LLVMBasicBlockRef label_blocks[MAX_LABELS];
+static int     label_count = 0;
+
+/* parserLLVM.y, no prólogo */
+extern void delete_list(double elem, double *data, long *len);
+extern double in_list(double elem, double *data, long len);
+
+
+/* retorna NULL se a variável não existe */
+LLVMValueRef find_variable(const char *name) {
+    for (int i = 0; i < symbol_count; i++) {
+        if (strcmp(symbol_table[i].name, name) == 0)
+            return symbol_table[i].value;
+    }
+    return NULL;
+}
+
+void registerLabel(const char *name, LLVMBasicBlockRef bb) {
+    label_names[label_count] = strdup(name);
+    label_blocks[label_count] = bb;
+    label_count++;
+}
+
+LLVMBasicBlockRef findLabel(const char *name) {
+    for (int i = 0; i < label_count; i++)
+        if (strcmp(label_names[i], name) == 0)
+            return label_blocks[i];
+    return NULL;
+}
+
+/* Error handling */
 void yyerror(const char *s) {
     fprintf(stderr, "Error: %s at line %d\n", s, yylineno);
 }
 
-/* Mesma rotina de duplicação de string para portabilidade */
+/* String duplication for portability */
 static char *copyString(const char *s) {
     char *p = malloc(strlen(s) + 1);
     if (p) strcpy(p, s);
@@ -91,7 +164,7 @@ static char *copyString(const char *s) {
 extern int yylex();
 extern FILE *yyin;
 
-#line 95 "parser.tab.c"
+#line 168 "parserLLVM.tab.c"
 
 # ifndef YY_CAST
 #  ifdef __cplusplus
@@ -114,7 +187,7 @@ extern FILE *yyin;
 #  endif
 # endif
 
-#include "parser.tab.h"
+#include "parserLLVM.tab.h"
 /* Symbol kind.  */
 enum yysymbol_kind_t
 {
@@ -154,28 +227,32 @@ enum yysymbol_kind_t
   YYSYMBOL_COMMENT = 32,                   /* COMMENT  */
   YYSYMBOL_INDENT = 33,                    /* INDENT  */
   YYSYMBOL_NEWLINE = 34,                   /* NEWLINE  */
-  YYSYMBOL_NUMBER = 35,                    /* NUMBER  */
-  YYSYMBOL_YYACCEPT = 36,                  /* $accept  */
-  YYSYMBOL_program = 37,                   /* program  */
-  YYSYMBOL_line = 38,                      /* line  */
-  YYSYMBOL_opt_indent = 39,                /* opt_indent  */
-  YYSYMBOL_statement = 40,                 /* statement  */
-  YYSYMBOL_assignment = 41,                /* assignment  */
-  YYSYMBOL_math_operation = 42,            /* math_operation  */
-  YYSYMBOL_logical_operation = 43,         /* logical_operation  */
-  YYSYMBOL_condition = 44,                 /* condition  */
-  YYSYMBOL_comparator = 45,                /* comparator  */
-  YYSYMBOL_label_def = 46,                 /* label_def  */
-  YYSYMBOL_goto_command = 47,              /* goto_command  */
-  YYSYMBOL_exit_command = 48,              /* exit_command  */
-  YYSYMBOL_input_command = 49,             /* input_command  */
-  YYSYMBOL_print_command = 50,             /* print_command  */
-  YYSYMBOL_bin_command = 51,               /* bin_command  */
-  YYSYMBOL_list_command = 52,              /* list_command  */
-  YYSYMBOL_list_insert = 53,               /* list_insert  */
-  YYSYMBOL_list_delete = 54,               /* list_delete  */
-  YYSYMBOL_list_in_check = 55,             /* list_in_check  */
-  YYSYMBOL_value = 56                      /* value  */
+  YYSYMBOL_TRUE = 35,                      /* TRUE  */
+  YYSYMBOL_FALSE = 36,                     /* FALSE  */
+  YYSYMBOL_NUMBER = 37,                    /* NUMBER  */
+  YYSYMBOL_YYACCEPT = 38,                  /* $accept  */
+  YYSYMBOL_program = 39,                   /* program  */
+  YYSYMBOL_line = 40,                      /* line  */
+  YYSYMBOL_opt_indent = 41,                /* opt_indent  */
+  YYSYMBOL_statement = 42,                 /* statement  */
+  YYSYMBOL_assignment = 43,                /* assignment  */
+  YYSYMBOL_math_operation = 44,            /* math_operation  */
+  YYSYMBOL_logical_operation = 45,         /* logical_operation  */
+  YYSYMBOL_if_stmt = 46,                   /* if_stmt  */
+  YYSYMBOL_47_1 = 47,                      /* $@1  */
+  YYSYMBOL_then_block = 48,                /* then_block  */
+  YYSYMBOL_comparator = 49,                /* comparator  */
+  YYSYMBOL_label_def = 50,                 /* label_def  */
+  YYSYMBOL_goto_command = 51,              /* goto_command  */
+  YYSYMBOL_exit_command = 52,              /* exit_command  */
+  YYSYMBOL_input_command = 53,             /* input_command  */
+  YYSYMBOL_print_command = 54,             /* print_command  */
+  YYSYMBOL_bin_command = 55,               /* bin_command  */
+  YYSYMBOL_list_command = 56,              /* list_command  */
+  YYSYMBOL_list_insert = 57,               /* list_insert  */
+  YYSYMBOL_list_delete = 58,               /* list_delete  */
+  YYSYMBOL_list_in_check = 59,             /* list_in_check  */
+  YYSYMBOL_value = 60                      /* value  */
 };
 typedef enum yysymbol_kind_t yysymbol_kind_t;
 
@@ -503,19 +580,19 @@ union yyalloc
 /* YYFINAL -- State number of the termination state.  */
 #define YYFINAL  2
 /* YYLAST -- Last index in YYTABLE.  */
-#define YYLAST   78
+#define YYLAST   85
 
 /* YYNTOKENS -- Number of terminals.  */
-#define YYNTOKENS  36
+#define YYNTOKENS  38
 /* YYNNTS -- Number of nonterminals.  */
-#define YYNNTS  21
+#define YYNNTS  23
 /* YYNRULES -- Number of rules.  */
-#define YYNRULES  52
+#define YYNRULES  57
 /* YYNSTATES -- Number of states.  */
-#define YYNSTATES  98
+#define YYNSTATES  107
 
 /* YYMAXUTOK -- Last valid token kind.  */
-#define YYMAXUTOK   290
+#define YYMAXUTOK   292
 
 
 /* YYTRANSLATE(TOKEN-NUM) -- Symbol number corresponding to TOKEN-NUM
@@ -558,19 +635,19 @@ static const yytype_int8 yytranslate[] =
        5,     6,     7,     8,     9,    10,    11,    12,    13,    14,
       15,    16,    17,    18,    19,    20,    21,    22,    23,    24,
       25,    26,    27,    28,    29,    30,    31,    32,    33,    34,
-      35
+      35,    36,    37
 };
 
 #if YYDEBUG
 /* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
-static const yytype_uint8 yyrline[] =
+static const yytype_int16 yyrline[] =
 {
-       0,    54,    54,    56,    60,    63,    65,    69,    70,    71,
-      72,    73,    74,    75,    76,    77,    78,    79,    80,    81,
-      82,    83,    87,    94,    98,   102,   106,   110,   114,   118,
-     125,   129,   133,   140,   147,   148,   149,   150,   151,   152,
-     156,   163,   170,   176,   183,   190,   197,   204,   211,   218,
-     225,   230,   231
+       0,   131,   131,   133,   137,   138,   141,   143,   147,   148,
+     149,   150,   151,   152,   153,   154,   155,   156,   157,   158,
+     159,   160,   164,   171,   176,   181,   186,   191,   195,   199,
+     207,   211,   215,   223,   222,   264,   265,   269,   270,   271,
+     272,   273,   274,   278,   297,   324,   344,   398,   417,   425,
+     455,   515,   593,   661,   664,   668,   669,   670
 };
 #endif
 
@@ -590,12 +667,13 @@ static const char *const yytname[] =
   "MUL", "DIV", "POW", "MOD", "AND", "OR", "NOT", "IF", "EQUAL",
   "NOTEQUAL", "LESS", "GREATER", "LESSEQUAL", "GREATEREQUAL", "LABEL",
   "GOTO", "EXIT", "INPUT", "PRINT", "BIN", "LIST", "INSERT", "DELETE",
-  "IN", "IDENTIFIER", "STRING", "COMMENT", "INDENT", "NEWLINE", "NUMBER",
-  "$accept", "program", "line", "opt_indent", "statement", "assignment",
-  "math_operation", "logical_operation", "condition", "comparator",
-  "label_def", "goto_command", "exit_command", "input_command",
-  "print_command", "bin_command", "list_command", "list_insert",
-  "list_delete", "list_in_check", "value", YY_NULLPTR
+  "IN", "IDENTIFIER", "STRING", "COMMENT", "INDENT", "NEWLINE", "TRUE",
+  "FALSE", "NUMBER", "$accept", "program", "line", "opt_indent",
+  "statement", "assignment", "math_operation", "logical_operation",
+  "if_stmt", "$@1", "then_block", "comparator", "label_def",
+  "goto_command", "exit_command", "input_command", "print_command",
+  "bin_command", "list_command", "list_insert", "list_delete",
+  "list_in_check", "value", YY_NULLPTR
 };
 
 static const char *
@@ -605,7 +683,7 @@ yysymbol_name (yysymbol_kind_t yysymbol)
 }
 #endif
 
-#define YYPACT_NINF (-44)
+#define YYPACT_NINF (-51)
 
 #define yypact_value_is_default(Yyn) \
   ((Yyn) == YYPACT_NINF)
@@ -619,16 +697,17 @@ yysymbol_name (yysymbol_kind_t yysymbol)
    STATE-NUM.  */
 static const yytype_int8 yypact[] =
 {
-     -44,     8,   -44,   -44,   -44,    39,   -23,   -13,   -12,   -11,
-      -9,    -8,    -7,    -6,     1,     2,     3,     4,     5,   -44,
-       6,   -15,     7,     9,    23,    24,    25,   -44,    22,   -44,
-     -44,   -44,   -44,   -44,   -44,   -44,   -44,   -44,   -44,   -44,
-     -44,   -44,   -44,   -15,   -15,   -15,   -15,   -15,   -15,   -15,
-      27,    28,    40,    -5,   -44,   -44,   -44,   -44,   -44,   -44,
-     -44,    42,   -44,    43,    44,    45,   -44,   -44,   -15,   -15,
-     -15,   -15,   -15,   -15,    46,    47,   -44,   -44,   -44,   -44,
-     -44,   -44,   -44,   -15,   -44,   -44,   -44,    48,   -44,   -44,
-     -44,   -44,   -44,   -44,   -44,   -44,   -44,   -44
+     -51,     8,   -51,   -19,   -51,   -51,    39,   -51,    20,   -18,
+     -17,   -13,   -12,   -11,   -10,    -8,    -7,    -6,    -5,    -4,
+      -3,   -51,    10,   -21,    22,    23,    24,    25,    26,   -51,
+      35,   -51,   -51,   -51,   -51,   -51,   -51,   -51,   -51,   -51,
+     -51,   -51,   -51,   -51,   -51,   -51,   -51,   -51,   -51,   -51,
+     -21,   -21,   -21,   -21,   -21,   -21,   -21,   -21,    27,    28,
+      40,   -51,   -51,   -51,   -51,   -51,   -51,   -51,   -51,   -51,
+      42,   -51,    43,    44,    45,   -51,    46,   -51,   -21,   -21,
+     -21,   -21,   -21,   -21,    47,    48,   -51,   -51,   -51,   -51,
+      49,   -51,   -51,   -51,   -51,   -51,   -51,   -51,   -51,   -51,
+     -51,    50,    39,   -51,    51,    50,   -51
 };
 
 /* YYDEFACT[STATE-NUM] -- Default reduction number in state STATE-NUM.
@@ -636,32 +715,33 @@ static const yytype_int8 yypact[] =
    means the default is an error.  */
 static const yytype_int8 yydefact[] =
 {
-       2,     5,     1,     6,     3,     0,     0,     0,     0,     0,
-       0,     0,     0,     0,     0,     0,     0,     0,     0,    42,
-       0,     0,     0,     0,     0,     0,     0,    21,     0,     7,
-       8,     9,    10,    11,    12,    13,    14,    15,    16,    17,
-      18,    19,    20,     0,     0,     0,     0,     0,     0,     0,
-       0,     0,     0,     0,    40,    41,    43,    52,    51,    50,
-      44,     0,    46,     0,     0,     0,     4,    22,     0,     0,
-       0,     0,     0,    28,     0,     0,    32,    34,    35,    36,
-      37,    38,    39,     0,    45,    47,    48,     0,    23,    24,
-      25,    26,    27,    29,    30,    31,    33,    49
+       2,     6,     1,     0,     7,     3,     0,     4,     0,     0,
+       0,     0,     0,     0,     0,     0,     0,     0,     0,     0,
+       0,    45,     0,     0,     0,     0,     0,     0,     0,    21,
+       0,     8,     9,    10,    11,    12,    13,    14,    15,    16,
+      17,    18,    19,    20,    37,    38,    39,    40,    41,    42,
+       0,     0,     0,     0,     0,     0,     0,     0,     0,     0,
+       0,    43,    44,    46,    57,    54,    55,    56,    53,    47,
+       0,    49,     0,     0,     0,     5,     0,    22,     0,     0,
+       0,     0,     0,    28,     0,     0,    32,    48,    50,    51,
+       0,    33,    23,    24,    25,    26,    27,    29,    30,    31,
+      52,    36,     0,    34,     0,    36,    35
 };
 
 /* YYPGOTO[NTERM-NUM].  */
 static const yytype_int8 yypgoto[] =
 {
-     -44,   -44,   -44,   -44,   -44,   -44,   -44,   -44,   -44,   -44,
-     -44,   -44,   -44,   -44,   -44,   -44,   -44,   -44,   -44,   -44,
-     -43
+     -51,   -51,   -51,   -51,   -26,   -51,   -51,   -51,   -51,   -51,
+     -24,   -51,   -51,   -51,   -51,   -51,   -51,   -51,   -51,   -51,
+     -51,   -51,   -50
 };
 
 /* YYDEFGOTO[NTERM-NUM].  */
 static const yytype_int8 yydefgoto[] =
 {
-       0,     1,     4,     5,    28,    29,    30,    31,    32,    83,
-      33,    34,    35,    36,    37,    38,    39,    40,    41,    42,
-      60
+       0,     1,     5,     6,    30,    31,    32,    33,     7,   101,
+     103,    50,    34,    35,    36,    37,    38,    39,    40,    41,
+      42,    43,    69
 };
 
 /* YYTABLE[YYPACT[STATE-NUM]] -- What to do in state STATE-NUM.  If
@@ -669,64 +749,67 @@ static const yytype_int8 yydefgoto[] =
    number is the opposite.  If YYTABLE_NINF, syntax error.  */
 static const yytype_int8 yytable[] =
 {
-      67,    68,    69,    70,    71,    72,    73,    43,     2,    77,
-      78,    79,    80,    81,    82,    57,    58,    44,    45,    46,
-      59,    47,    48,    49,    50,    88,    89,    90,    91,    92,
-      93,    51,    52,    53,    54,    55,    56,    61,     0,    62,
-      96,     3,     6,     7,     8,     9,    10,    11,    12,    13,
-      14,    15,    16,    63,    64,    65,    66,    74,    75,    17,
-      18,    19,    20,    21,    22,    23,    24,    25,    26,     0,
-      76,    27,    84,    85,    86,    87,    94,    95,    97
+      76,    77,    78,    79,    80,    81,    82,    83,     2,    64,
+      65,     8,    51,    52,    66,    67,    68,    53,    54,    55,
+      56,     3,    57,    58,    59,    60,    61,    62,    92,    93,
+      94,    95,    96,    97,    44,    45,    46,    47,    48,    49,
+      63,     4,     9,    10,    11,    12,    13,    14,    15,    16,
+      17,    18,    70,    71,    72,    73,    74,    84,    85,    19,
+      20,    21,    22,    23,    24,    25,    26,    27,    28,    75,
+      86,    29,    87,    88,    89,    90,   104,    98,    99,   100,
+      91,   106,     0,   102,     0,   105
 };
 
 static const yytype_int8 yycheck[] =
 {
-      43,    44,    45,    46,    47,    48,    49,    30,     0,    14,
-      15,    16,    17,    18,    19,    30,    31,    30,    30,    30,
-      35,    30,    30,    30,    30,    68,    69,    70,    71,    72,
-      73,    30,    30,    30,    30,    30,    30,    30,    -1,    30,
-      83,    33,     3,     4,     5,     6,     7,     8,     9,    10,
-      11,    12,    13,    30,    30,    30,    34,    30,    30,    20,
-      21,    22,    23,    24,    25,    26,    27,    28,    29,    -1,
-      30,    32,    30,    30,    30,    30,    30,    30,    30
+      50,    51,    52,    53,    54,    55,    56,    57,     0,    30,
+      31,    30,    30,    30,    35,    36,    37,    30,    30,    30,
+      30,    13,    30,    30,    30,    30,    30,    30,    78,    79,
+      80,    81,    82,    83,    14,    15,    16,    17,    18,    19,
+      30,    33,     3,     4,     5,     6,     7,     8,     9,    10,
+      11,    12,    30,    30,    30,    30,    30,    30,    30,    20,
+      21,    22,    23,    24,    25,    26,    27,    28,    29,    34,
+      30,    32,    30,    30,    30,    30,   102,    30,    30,    30,
+      34,   105,    -1,    33,    -1,    34
 };
 
 /* YYSTOS[STATE-NUM] -- The symbol kind of the accessing symbol of
    state STATE-NUM.  */
 static const yytype_int8 yystos[] =
 {
-       0,    37,     0,    33,    38,    39,     3,     4,     5,     6,
-       7,     8,     9,    10,    11,    12,    13,    20,    21,    22,
-      23,    24,    25,    26,    27,    28,    29,    32,    40,    41,
-      42,    43,    44,    46,    47,    48,    49,    50,    51,    52,
-      53,    54,    55,    30,    30,    30,    30,    30,    30,    30,
-      30,    30,    30,    30,    30,    30,    30,    30,    31,    35,
-      56,    30,    30,    30,    30,    30,    34,    56,    56,    56,
-      56,    56,    56,    56,    30,    30,    30,    14,    15,    16,
-      17,    18,    19,    45,    30,    30,    30,    30,    56,    56,
-      56,    56,    56,    56,    30,    30,    56,    30
+       0,    39,     0,    13,    33,    40,    41,    46,    30,     3,
+       4,     5,     6,     7,     8,     9,    10,    11,    12,    20,
+      21,    22,    23,    24,    25,    26,    27,    28,    29,    32,
+      42,    43,    44,    45,    50,    51,    52,    53,    54,    55,
+      56,    57,    58,    59,    14,    15,    16,    17,    18,    19,
+      49,    30,    30,    30,    30,    30,    30,    30,    30,    30,
+      30,    30,    30,    30,    30,    31,    35,    36,    37,    60,
+      30,    30,    30,    30,    30,    34,    60,    60,    60,    60,
+      60,    60,    60,    60,    30,    30,    30,    30,    30,    30,
+      30,    34,    60,    60,    60,    60,    60,    60,    30,    30,
+      30,    47,    33,    48,    42,    34,    48
 };
 
 /* YYR1[RULE-NUM] -- Symbol kind of the left-hand side of rule RULE-NUM.  */
 static const yytype_int8 yyr1[] =
 {
-       0,    36,    37,    37,    38,    39,    39,    40,    40,    40,
-      40,    40,    40,    40,    40,    40,    40,    40,    40,    40,
-      40,    40,    41,    42,    42,    42,    42,    42,    42,    42,
-      43,    43,    43,    44,    45,    45,    45,    45,    45,    45,
-      46,    47,    48,    49,    50,    51,    52,    53,    54,    55,
-      56,    56,    56
+       0,    38,    39,    39,    40,    40,    41,    41,    42,    42,
+      42,    42,    42,    42,    42,    42,    42,    42,    42,    42,
+      42,    42,    43,    44,    44,    44,    44,    44,    44,    44,
+      45,    45,    45,    47,    46,    48,    48,    49,    49,    49,
+      49,    49,    49,    50,    51,    52,    53,    54,    55,    56,
+      57,    58,    59,    60,    60,    60,    60,    60
 };
 
 /* YYR2[RULE-NUM] -- Number of symbols on the right-hand side of rule RULE-NUM.  */
 static const yytype_int8 yyr2[] =
 {
-       0,     2,     0,     2,     3,     0,     1,     1,     1,     1,
+       0,     2,     0,     2,     1,     3,     0,     1,     1,     1,
        1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
        1,     1,     3,     4,     4,     4,     4,     4,     3,     4,
-       4,     4,     3,     4,     1,     1,     1,     1,     1,     1,
-       2,     2,     1,     2,     2,     3,     2,     3,     3,     4,
-       1,     1,     1
+       4,     4,     3,     0,     7,     4,     0,     1,     1,     1,
+       1,     1,     1,     2,     2,     1,     2,     2,     3,     2,
+       3,     3,     4,     1,     1,     1,     1,     1
 };
 
 
@@ -1190,262 +1273,630 @@ yyreduce:
   switch (yyn)
     {
   case 22: /* assignment: SET IDENTIFIER value  */
-#line 87 "parser.y"
+#line 164 "parserLLVM.y"
                          {
-        printf("Assignment: %s = %s\n", (yyvsp[-1].sval), (yyvsp[0].sval));
-        free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+        LLVMBuildStore(builder, (yyvsp[0].lval), find_or_create_variable((yyvsp[-1].sval)));
+        free((yyvsp[-1].sval));
     }
-#line 1199 "parser.tab.c"
+#line 1282 "parserLLVM.tab.c"
     break;
 
   case 23: /* math_operation: ADD IDENTIFIER value value  */
-#line 94 "parser.y"
+#line 171 "parserLLVM.y"
                                {
-        printf("Math op add: %s %s %s\n", (yyvsp[-2].sval), (yyvsp[-1].sval), (yyvsp[0].sval));
-        free((yyvsp[-2].sval)); free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+        LLVMValueRef result = LLVMBuildFAdd(builder, (yyvsp[-1].lval), (yyvsp[0].lval), "addtmp");
+        LLVMBuildStore(builder, result, find_or_create_variable((yyvsp[-2].sval)));
+        free((yyvsp[-2].sval));
     }
-#line 1208 "parser.tab.c"
+#line 1292 "parserLLVM.tab.c"
     break;
 
   case 24: /* math_operation: SUB IDENTIFIER value value  */
-#line 98 "parser.y"
+#line 176 "parserLLVM.y"
                                {
-        printf("Math op sub: %s %s %s\n", (yyvsp[-2].sval), (yyvsp[-1].sval), (yyvsp[0].sval));
-        free((yyvsp[-2].sval)); free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+        LLVMValueRef result = LLVMBuildFSub(builder, (yyvsp[-1].lval), (yyvsp[0].lval), "subtmp");
+        LLVMBuildStore(builder, result, find_or_create_variable((yyvsp[-2].sval)));
+        free((yyvsp[-2].sval));
     }
-#line 1217 "parser.tab.c"
+#line 1302 "parserLLVM.tab.c"
     break;
 
   case 25: /* math_operation: MUL IDENTIFIER value value  */
-#line 102 "parser.y"
+#line 181 "parserLLVM.y"
                                {
-        printf("Math op mul: %s %s %s\n", (yyvsp[-2].sval), (yyvsp[-1].sval), (yyvsp[0].sval));
-        free((yyvsp[-2].sval)); free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+        LLVMValueRef result = LLVMBuildFMul(builder, (yyvsp[-1].lval), (yyvsp[0].lval), "multmp");
+        LLVMBuildStore(builder, result, find_or_create_variable((yyvsp[-2].sval)));
+        free((yyvsp[-2].sval));
     }
-#line 1226 "parser.tab.c"
+#line 1312 "parserLLVM.tab.c"
     break;
 
   case 26: /* math_operation: DIV IDENTIFIER value value  */
-#line 106 "parser.y"
+#line 186 "parserLLVM.y"
                                {
-        printf("Math op div: %s %s %s\n", (yyvsp[-2].sval), (yyvsp[-1].sval), (yyvsp[0].sval));
-        free((yyvsp[-2].sval)); free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+        LLVMValueRef result = LLVMBuildFDiv(builder, (yyvsp[-1].lval), (yyvsp[0].lval), "divtmp");
+        LLVMBuildStore(builder, result, find_or_create_variable((yyvsp[-2].sval)));
+        free((yyvsp[-2].sval));
     }
-#line 1235 "parser.tab.c"
+#line 1322 "parserLLVM.tab.c"
     break;
 
   case 27: /* math_operation: POW IDENTIFIER value value  */
-#line 110 "parser.y"
+#line 191 "parserLLVM.y"
                                {
-        printf("Math op pow: %s %s %s\n", (yyvsp[-2].sval), (yyvsp[-1].sval), (yyvsp[0].sval));
-        free((yyvsp[-2].sval)); free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+        printf("Math op pow: %s (not implemented)\n", (yyvsp[-2].sval));
+        free((yyvsp[-2].sval));
     }
-#line 1244 "parser.tab.c"
+#line 1331 "parserLLVM.tab.c"
     break;
 
   case 28: /* math_operation: MOD IDENTIFIER value  */
-#line 114 "parser.y"
+#line 195 "parserLLVM.y"
                          {
-        printf("Math op mod: %s %s \n", (yyvsp[-1].sval), (yyvsp[0].sval));
-        free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+        printf("Math op mod: %s (not implemented)\n", (yyvsp[-1].sval));
+        free((yyvsp[-1].sval));
     }
-#line 1253 "parser.tab.c"
+#line 1340 "parserLLVM.tab.c"
     break;
 
   case 29: /* math_operation: MOD IDENTIFIER value value  */
-#line 118 "parser.y"
-                              {
-        printf("Math op mod: %s %s %s\n", (yyvsp[-2].sval), (yyvsp[-1].sval), (yyvsp[0].sval));
-        free((yyvsp[-2].sval)); free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+#line 199 "parserLLVM.y"
+                               {
+        LLVMValueRef result = LLVMBuildFRem(builder, (yyvsp[-1].lval), (yyvsp[0].lval), "modtmp");
+        LLVMBuildStore(builder, result, find_or_create_variable((yyvsp[-2].sval)));
+        free((yyvsp[-2].sval));
     }
-#line 1262 "parser.tab.c"
+#line 1350 "parserLLVM.tab.c"
     break;
 
   case 30: /* logical_operation: AND IDENTIFIER IDENTIFIER IDENTIFIER  */
-#line 125 "parser.y"
+#line 207 "parserLLVM.y"
                                          {
-        printf("Logical and: %s %s %s\n", (yyvsp[-2].sval), (yyvsp[-1].sval), (yyvsp[0].sval));
+        printf("Logical and: %s %s %s (not implemented)\n", (yyvsp[-2].sval), (yyvsp[-1].sval), (yyvsp[0].sval));
         free((yyvsp[-2].sval)); free((yyvsp[-1].sval)); free((yyvsp[0].sval));
     }
-#line 1271 "parser.tab.c"
+#line 1359 "parserLLVM.tab.c"
     break;
 
   case 31: /* logical_operation: OR IDENTIFIER IDENTIFIER IDENTIFIER  */
-#line 129 "parser.y"
+#line 211 "parserLLVM.y"
                                         {
-        printf("Logical or: %s %s %s\n", (yyvsp[-2].sval), (yyvsp[-1].sval), (yyvsp[0].sval));
+        printf("Logical or: %s %s %s (not implemented)\n", (yyvsp[-2].sval), (yyvsp[-1].sval), (yyvsp[0].sval));
         free((yyvsp[-2].sval)); free((yyvsp[-1].sval)); free((yyvsp[0].sval));
     }
-#line 1280 "parser.tab.c"
+#line 1368 "parserLLVM.tab.c"
     break;
 
   case 32: /* logical_operation: NOT IDENTIFIER IDENTIFIER  */
-#line 133 "parser.y"
+#line 215 "parserLLVM.y"
                               {
-        printf("Logical not: %s %s\n", (yyvsp[-1].sval), (yyvsp[0].sval));
+        printf("Logical not: %s %s (not implemented)\n", (yyvsp[-1].sval), (yyvsp[0].sval));
         free((yyvsp[-1].sval)); free((yyvsp[0].sval));
     }
-#line 1289 "parser.tab.c"
+#line 1377 "parserLLVM.tab.c"
     break;
 
-  case 33: /* condition: IF IDENTIFIER comparator value  */
-#line 140 "parser.y"
-                                   {
-        printf("If %s %s %s\n", (yyvsp[-2].sval), (yyvsp[-1].sval), (yyvsp[0].sval));
-        free((yyvsp[-2].sval)); free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+  case 33: /* $@1: %empty  */
+#line 223 "parserLLVM.y"
+    { 
+        // 1) carrega a variável e faz a comparação
+        LLVMValueRef var = LLVMBuildLoad2(
+            builder,
+            LLVMDoubleTypeInContext(context),
+            find_variable((yyvsp[-3].sval)),
+            "if.load"
+        );
+        
+        LLVMValueRef cmp;
+        if      (strcmp((yyvsp[-2].sval), "==")==0) cmp = LLVMBuildFCmp(builder, LLVMRealOEQ, var, (yyvsp[-1].lval), "if.cmp");
+        else if (strcmp((yyvsp[-2].sval), "!=")==0) cmp = LLVMBuildFCmp(builder, LLVMRealONE,var, (yyvsp[-1].lval), "if.cmp");
+        else if (strcmp((yyvsp[-2].sval), "<" )==0) cmp = LLVMBuildFCmp(builder, LLVMRealOLT,var, (yyvsp[-1].lval), "if.cmp");
+        else if (strcmp((yyvsp[-2].sval), ">" )==0) cmp = LLVMBuildFCmp(builder, LLVMRealOGT,var, (yyvsp[-1].lval), "if.cmp");
+        else if (strcmp((yyvsp[-2].sval), "<=")==0) cmp = LLVMBuildFCmp(builder, LLVMRealOLE,var, (yyvsp[-1].lval), "if.cmp");
+        else                           cmp = LLVMBuildFCmp(builder, LLVMRealOGE,var, (yyvsp[-1].lval), "if.cmp");
+
+        // 2) cria os blocos THEN e MERGE
+        if_then_bb  = LLVMAppendBasicBlockInContext(context, main_func, "if.then");
+        if_merge_bb = LLVMAppendBasicBlockInContext(context, main_func, "if.end");
+
+        // 3) faz o branch condicional
+        LLVMBuildCondBr(builder, cmp, if_then_bb, if_merge_bb);
+
+        // 4) posiciona o builder no início do THEN
+        LLVMPositionBuilderAtEnd(builder, if_then_bb);
+
+        free((yyvsp[-3].sval));
+        free((yyvsp[-2].sval));
     }
-#line 1298 "parser.tab.c"
+#line 1412 "parserLLVM.tab.c"
     break;
 
-  case 34: /* comparator: EQUAL  */
-#line 147 "parser.y"
+  case 34: /* if_stmt: IF IDENTIFIER comparator value NEWLINE $@1 then_block  */
+#line 254 "parserLLVM.y"
+    {
+        // 6) ao sair do bloco indentado, fecha o THEN com um branch para o MERGE
+        LLVMBuildBr(builder, if_merge_bb);
+        // 7) reposiciona o builder no MERGE, para as instruções depois do if
+        LLVMPositionBuilderAtEnd(builder, if_merge_bb);
+    }
+#line 1423 "parserLLVM.tab.c"
+    break;
+
+  case 37: /* comparator: EQUAL  */
+#line 269 "parserLLVM.y"
                   { (yyval.sval) = copyString("=="); }
-#line 1304 "parser.tab.c"
+#line 1429 "parserLLVM.tab.c"
     break;
 
-  case 35: /* comparator: NOTEQUAL  */
-#line 148 "parser.y"
+  case 38: /* comparator: NOTEQUAL  */
+#line 270 "parserLLVM.y"
                   { (yyval.sval) = copyString("!="); }
-#line 1310 "parser.tab.c"
+#line 1435 "parserLLVM.tab.c"
     break;
 
-  case 36: /* comparator: LESS  */
-#line 149 "parser.y"
+  case 39: /* comparator: LESS  */
+#line 271 "parserLLVM.y"
                   { (yyval.sval) = copyString("<"); }
-#line 1316 "parser.tab.c"
+#line 1441 "parserLLVM.tab.c"
     break;
 
-  case 37: /* comparator: GREATER  */
-#line 150 "parser.y"
+  case 40: /* comparator: GREATER  */
+#line 272 "parserLLVM.y"
                   { (yyval.sval) = copyString(">"); }
-#line 1322 "parser.tab.c"
+#line 1447 "parserLLVM.tab.c"
     break;
 
-  case 38: /* comparator: LESSEQUAL  */
-#line 151 "parser.y"
+  case 41: /* comparator: LESSEQUAL  */
+#line 273 "parserLLVM.y"
                   { (yyval.sval) = copyString("<="); }
-#line 1328 "parser.tab.c"
+#line 1453 "parserLLVM.tab.c"
     break;
 
-  case 39: /* comparator: GREATEREQUAL  */
-#line 152 "parser.y"
+  case 42: /* comparator: GREATEREQUAL  */
+#line 274 "parserLLVM.y"
                   { (yyval.sval) = copyString(">="); }
-#line 1334 "parser.tab.c"
+#line 1459 "parserLLVM.tab.c"
     break;
 
-  case 40: /* label_def: LABEL IDENTIFIER  */
-#line 156 "parser.y"
+  case 43: /* label_def: LABEL IDENTIFIER  */
+#line 278 "parserLLVM.y"
                      {
-        printf("Label: %s\n", (yyvsp[0].sval));
+        LLVMBasicBlockRef bb = LLVMAppendBasicBlockInContext(
+            context,
+            main_func,
+            (yyvsp[0].sval)
+        );
+        // Registra no mapa
+        registerLabel((yyvsp[0].sval), bb);
+        // Fecha o bloco anterior com um branch
+        LLVMBuildBr(builder, bb);
+        // Move o builder para o rótulo
+        LLVMPositionBuilderAtEnd(builder, bb);
         free((yyvsp[0].sval));
     }
-#line 1343 "parser.tab.c"
+#line 1478 "parserLLVM.tab.c"
     break;
 
-  case 41: /* goto_command: GOTO IDENTIFIER  */
-#line 163 "parser.y"
-                    {
-        printf("Goto: %s\n", (yyvsp[0].sval));
-        free((yyvsp[0].sval));
+  case 44: /* goto_command: GOTO IDENTIFIER  */
+#line 297 "parserLLVM.y"
+                  {
+    LLVMBasicBlockRef target = findLabel((yyvsp[0].sval));
+    if (!target) {
+      yyerror("Label não encontrada");
+    } else {
+      // 1) branch para o bloco-alvo
+      LLVMBuildBr(builder, target);
+
+      // 2) cria um bloco de continuação único
+      char cont_name[32];
+      sprintf(cont_name, "cont.%d", cont_count++);
+      LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlockInContext(
+        context,
+        main_func,
+        cont_name
+      );
+
+      // 3) reposiciona o builder nesse bloco de continuação
+      LLVMPositionBuilderAtEnd(builder, cont_bb);
     }
-#line 1352 "parser.tab.c"
+    free((yyvsp[0].sval));
+  }
+#line 1505 "parserLLVM.tab.c"
     break;
 
-  case 42: /* exit_command: EXIT  */
-#line 170 "parser.y"
+  case 45: /* exit_command: EXIT  */
+#line 324 "parserLLVM.y"
          {
-        printf("Exit\n");
+        // 1) termina a função aqui
+        LLVMBuildRetVoid(builder);
+
+        // 2) cria um bloco de continuação único, para qualquer código após o exit
+        char cont_name[32];
+        snprintf(cont_name, sizeof(cont_name), "cont.exit.%d", exit_cont++);
+        LLVMBasicBlockRef cont = LLVMAppendBasicBlockInContext(
+            context,
+            main_func,
+            cont_name
+        );
+
+        // 3) move o builder para dentro desse bloco de continuação
+        LLVMPositionBuilderAtEnd(builder, cont);
     }
-#line 1360 "parser.tab.c"
+#line 1526 "parserLLVM.tab.c"
     break;
 
-  case 43: /* input_command: INPUT IDENTIFIER  */
-#line 176 "parser.y"
+  case 46: /* input_command: INPUT IDENTIFIER  */
+#line 344 "parserLLVM.y"
                      {
-        printf("Input: %s\n", (yyvsp[0].sval));
+        // 0) Garante que temos a função printf disponível
+        LLVMValueRef printf_func = LLVMGetNamedFunction(module, "printf");
+        LLVMTypeRef printf_ty;
+        if (!printf_func) {
+            LLVMTypeRef param_types[] = { LLVMPointerType(LLVMInt8TypeInContext(context), 0) };
+            printf_ty = LLVMFunctionType(LLVMInt32TypeInContext(context), param_types, 1, /*isVarArg=*/1);
+            printf_func = LLVMAddFunction(module, "printf", printf_ty);
+            LLVMSetLinkage(printf_func, LLVMExternalLinkage);
+        } else {
+            printf_ty = LLVMGetElementType(LLVMTypeOf(printf_func));
+        }
+        // 0.1) Imprime uma mensagem padrao de input
+        LLVMValueRef prompt = LLVMBuildGlobalStringPtr(builder, "input: ", "prompt");
+        LLVMBuildCall2(builder, printf_ty, printf_func, (LLVMValueRef[]){ prompt }, 1, "");
+        // 1) Obtem (ou adiciona) a declaração de scanf
+        LLVMValueRef scanf_func = LLVMGetNamedFunction(module, "scanf");
+        if (!scanf_func) {
+            // scanf retorna int e recebe (i8*, double*)
+            LLVMTypeRef param_types[] = {
+                LLVMPointerType(LLVMInt8TypeInContext(context), 0),
+                LLVMPointerType(LLVMDoubleTypeInContext(context), 0)
+            };
+            LLVMTypeRef scanf_type = LLVMFunctionType(
+                LLVMInt32TypeInContext(context),
+                param_types, 2, /*isVarArg=*/1
+            );
+            scanf_func = LLVMAddFunction(module, "scanf", scanf_type);
+            LLVMSetLinkage(scanf_func, LLVMExternalLinkage);
+        }
+
+        // 2) Constroi a string de formato "%lf"
+        LLVMValueRef fmt = LLVMBuildGlobalStringPtr(
+            builder, "%lf", "fmt_scanf"
+        );
+
+        // 3) Passa (&variavel) diretamente, pois globals já são ponteiros
+        LLVMValueRef var_ptr = find_or_create_variable((yyvsp[0].sval));
+
+        // 4) Chama scanf(fmt, var_ptr)
+        LLVMBuildCall2(
+            builder,
+            LLVMGetElementType(LLVMTypeOf(scanf_func)),
+            scanf_func,
+            (LLVMValueRef[]){ fmt, var_ptr },
+            2,
+            ""
+        );
+
         free((yyvsp[0].sval));
     }
-#line 1369 "parser.tab.c"
+#line 1582 "parserLLVM.tab.c"
     break;
 
-  case 44: /* print_command: PRINT value  */
-#line 183 "parser.y"
+  case 47: /* print_command: PRINT value  */
+#line 398 "parserLLVM.y"
                 {
-        printf("Print: %s\n", (yyvsp[0].sval));
-        free((yyvsp[0].sval));
+        LLVMValueRef printf_func = LLVMGetNamedFunction(module, "printf");
+        LLVMTypeRef printf_type;
+        if (!printf_func) {
+            LLVMTypeRef param_types[] = { LLVMPointerType(LLVMInt8TypeInContext(context), 0) };
+            printf_type = LLVMFunctionType(LLVMInt32TypeInContext(context), param_types, 1, 1);
+            printf_func = LLVMAddFunction(module, "printf", printf_type);
+            LLVMSetLinkage(printf_func, LLVMExternalLinkage);
+        } else {
+            printf_type = LLVMGetElementType(LLVMTypeOf(printf_func));
+        }
+        char *format_str = "%f\n";
+        LLVMValueRef format = LLVMBuildGlobalStringPtr(builder, format_str, "format");
+        LLVMValueRef args[] = { format, (yyvsp[0].lval) };
+        LLVMBuildCall2(builder, printf_type, printf_func, args, 2, "");
     }
-#line 1378 "parser.tab.c"
+#line 1603 "parserLLVM.tab.c"
     break;
 
-  case 45: /* bin_command: BIN IDENTIFIER IDENTIFIER  */
-#line 190 "parser.y"
+  case 48: /* bin_command: BIN IDENTIFIER IDENTIFIER  */
+#line 417 "parserLLVM.y"
                               {
-        printf("Bin: %s to %s\n", (yyvsp[-1].sval), (yyvsp[0].sval));
+        printf("Bin: %s to %s (not implemented)\n", (yyvsp[-1].sval), (yyvsp[0].sval));
         free((yyvsp[-1].sval)); free((yyvsp[0].sval));
     }
-#line 1387 "parser.tab.c"
+#line 1612 "parserLLVM.tab.c"
     break;
 
-  case 46: /* list_command: LIST IDENTIFIER  */
-#line 197 "parser.y"
+  case 49: /* list_command: LIST IDENTIFIER  */
+#line 425 "parserLLVM.y"
                     {
-        printf("List: %s\n", (yyvsp[0].sval));
+        // Nome dos globals: "<nome>_data" e "<nome>_len"
+        char data_name[256], len_name[256];
+        snprintf(data_name, sizeof(data_name), "%s_data", (yyvsp[0].sval));
+        snprintf(len_name,  sizeof(len_name),  "%s_len",  (yyvsp[0].sval));
+
+        // 1) Se ainda não existir, cria o array [1024 x double]
+        if (!LLVMGetNamedGlobal(module, data_name)) {
+            LLVMTypeRef elem_ty  = LLVMDoubleTypeInContext(context);
+            // vetor de tamanho fixo 1024
+            LLVMTypeRef array_ty = LLVMArrayType(elem_ty, 1024);
+            LLVMValueRef data_g  = LLVMAddGlobal(module, array_ty, data_name);
+            // inicializa tudo a zero
+            LLVMSetInitializer(data_g, LLVMConstNull(array_ty));
+        }
+
+        // 2) Se ainda não existir, cria o global i64 para o length
+        if (!LLVMGetNamedGlobal(module, len_name)) {
+            LLVMTypeRef i64_ty = LLVMInt64TypeInContext(context);
+            LLVMValueRef len_g = LLVMAddGlobal(module, i64_ty, len_name);
+            // inicializa em 0
+            LLVMSetInitializer(len_g, LLVMConstInt(i64_ty, 0, /*isSigned=*/0));
+        }
+
         free((yyvsp[0].sval));
     }
-#line 1396 "parser.tab.c"
+#line 1643 "parserLLVM.tab.c"
     break;
 
-  case 47: /* list_insert: INSERT IDENTIFIER IDENTIFIER  */
-#line 204 "parser.y"
+  case 50: /* list_insert: INSERT IDENTIFIER IDENTIFIER  */
+#line 455 "parserLLVM.y"
                                  {
-        printf("Insert into %s %s\n", (yyvsp[0].sval), (yyvsp[-1].sval));
-        free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+        // Monta nomes dos globals: "<lista>_data" e "<lista>_len"
+        char data_name[256], len_name[256];
+        snprintf(data_name, sizeof(data_name), "%s_data", (yyvsp[0].sval));
+        snprintf(len_name,  sizeof(len_name),  "%s_len",  (yyvsp[0].sval));
+
+        // Obtém os globals já criados em `list_command`
+        LLVMValueRef data_g = LLVMGetNamedGlobal(module, data_name);
+        LLVMValueRef len_g  = LLVMGetNamedGlobal(module, len_name);
+        if (!data_g || !len_g) {
+            yyerror("Lista não existe");
+            free((yyvsp[-1].sval));
+            free((yyvsp[0].sval));
+            YYABORT;  /* aborta o parse aqui */
+        } else {
+            LLVMTypeRef i64_ty = LLVMInt64TypeInContext(context);
+
+            // 1) carrega o comprimento atual
+            LLVMValueRef len_val = LLVMBuildLoad2(builder, i64_ty, len_g, "len");
+
+            // 2) calcula ponteiro para data[len]
+            LLVMValueRef zero    = LLVMConstInt(i64_ty, 0, 0);
+            LLVMValueRef indices[2] = { zero, len_val };
+            LLVMValueRef elem_ptr = LLVMBuildInBoundsGEP(
+                builder,
+                data_g,
+                indices,
+                2,
+                "elem_ptr"
+            );
+
+            // 3) carrega o valor da variável a inserir
+            LLVMValueRef var = find_variable((yyvsp[-1].sval));
+            if (!var) {
+                yyerror("Variável não definida");
+                var = find_or_create_variable((yyvsp[-1].sval));
+            }
+            LLVMValueRef val = LLVMBuildLoad2(
+                builder,
+                LLVMDoubleTypeInContext(context),
+                var,
+                "val"
+            );
+
+            // 4) armazena no array e incrementa len
+            LLVMBuildStore(builder, val, elem_ptr);
+            LLVMValueRef one     = LLVMConstInt(i64_ty, 1, 0);
+            LLVMValueRef new_len = LLVMBuildAdd(builder, len_val, one, "newlen");
+            LLVMBuildStore(builder, new_len, len_g);
+        }
+
+        free((yyvsp[-1].sval));
+        free((yyvsp[0].sval));
     }
-#line 1405 "parser.tab.c"
+#line 1702 "parserLLVM.tab.c"
     break;
 
-  case 48: /* list_delete: DELETE IDENTIFIER IDENTIFIER  */
-#line 211 "parser.y"
+  case 51: /* list_delete: DELETE IDENTIFIER IDENTIFIER  */
+#line 515 "parserLLVM.y"
                                  {
-        printf("Delete %s from %s\n", (yyvsp[0].sval), (yyvsp[-1].sval));
-        free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+        // $2 = variável cujo valor será removido
+        // $3 = nome da lista
+        char data_name[256], len_name[256];
+        snprintf(data_name, sizeof(data_name), "%s_data", (yyvsp[0].sval));
+        snprintf(len_name,  sizeof(len_name),  "%s_len",  (yyvsp[0].sval));
+
+        // recupera os globals gerados em list_command
+        LLVMValueRef data_g = LLVMGetNamedGlobal(module, data_name);
+        LLVMValueRef len_g  = LLVMGetNamedGlobal(module, len_name);
+        if (!data_g || !len_g) {
+            yyerror("Lista não existe");
+            free((yyvsp[-1].sval));
+            free((yyvsp[0].sval));
+            YYABORT;
+        }
+
+        LLVMTypeRef dbl_ty = LLVMDoubleTypeInContext(context);
+        LLVMTypeRef i64_ty = LLVMInt64TypeInContext(context);
+
+        // carrega o valor a ser removido
+        LLVMValueRef var = find_variable((yyvsp[-1].sval));
+        if (!var) {
+            yyerror("Variável não definida");
+            var = find_or_create_variable((yyvsp[-1].sval));
+        }
+        LLVMValueRef elem_val = LLVMBuildLoad2(
+            builder,
+            dbl_ty,
+            var,
+            "elem"
+        );
+
+        // bitcast do array estático para double*
+        LLVMValueRef data_ptr = LLVMBuildBitCast(
+            builder,
+            data_g,
+            LLVMPointerType(dbl_ty, 0),
+            "data_ptr"
+        );
+
+        // declara ou recupera a função auxiliar delete_list
+        LLVMValueRef del_fn = LLVMGetNamedFunction(module, "delete_list");
+        if (!del_fn) {
+            LLVMTypeRef params[] = {
+                dbl_ty,
+                LLVMPointerType(dbl_ty, 0),
+                LLVMPointerType(i64_ty, 0)
+            };
+            LLVMTypeRef fty = LLVMFunctionType(
+                LLVMVoidTypeInContext(context),
+                params,
+                3,
+                /*isVarArg=*/0
+            );
+            del_fn = LLVMAddFunction(module, "delete_list", fty);
+            LLVMSetLinkage(del_fn, LLVMExternalLinkage);
+        }
+
+        // call delete_list(elem_val, data_ptr, &len)
+        LLVMBuildCall2(
+            builder,
+            LLVMGetElementType(LLVMTypeOf(del_fn)),
+            del_fn,
+            (LLVMValueRef[]){ elem_val, data_ptr, len_g },
+            3,
+            ""
+        );
+
+        free((yyvsp[-1].sval));
+        free((yyvsp[0].sval));
     }
-#line 1414 "parser.tab.c"
+#line 1779 "parserLLVM.tab.c"
     break;
 
-  case 49: /* list_in_check: IN IDENTIFIER IDENTIFIER IDENTIFIER  */
-#line 218 "parser.y"
+  case 52: /* list_in_check: IN IDENTIFIER IDENTIFIER IDENTIFIER  */
+#line 593 "parserLLVM.y"
                                         {
-        printf("In check: %s in %s? %s\n", (yyvsp[0].sval), (yyvsp[-2].sval), (yyvsp[-1].sval));
+        // monta nomes dos globals
+        char data_name[256], len_name[256];
+        snprintf(data_name, sizeof(data_name), "%s_data",  (yyvsp[-1].sval));
+        snprintf(len_name,  sizeof(len_name),  "%s_len",   (yyvsp[-1].sval));
+
+        // pega o array e o length
+        LLVMValueRef data_g = LLVMGetNamedGlobal(module, data_name);
+        LLVMValueRef len_g  = LLVMGetNamedGlobal(module, len_name);
+        if (!data_g || !len_g) {
+            yyerror("Lista não existe");
+            free((yyvsp[-2].sval)); free((yyvsp[-1].sval)); free((yyvsp[0].sval));
+            YYABORT;
+        }
+
+        LLVMTypeRef dbl_ty = LLVMDoubleTypeInContext(context);
+        LLVMTypeRef i64_ty = LLVMInt64TypeInContext(context);
+
+        // carrega o length
+        LLVMValueRef len_val = LLVMBuildLoad2(builder, i64_ty, len_g, "len");
+
+        // carrega o elemento a testar
+        LLVMValueRef var = find_variable((yyvsp[-2].sval));
+        if (!var) {
+            yyerror("Variável não definida");
+            var = find_or_create_variable((yyvsp[-2].sval));
+        }
+        LLVMValueRef elem_val = LLVMBuildLoad2(builder, dbl_ty, var, "elem");
+
+        // bitcast do global array para double*
+        LLVMValueRef data_ptr = LLVMBuildBitCast(
+            builder,
+            data_g,
+            LLVMPointerType(dbl_ty, 0),
+            "data_ptr"
+        );
+
+        // declara ou recupera a função in_list
+        LLVMValueRef in_func = LLVMGetNamedFunction(module, "in_list");
+        if (!in_func) {
+            LLVMTypeRef fparams[] = { dbl_ty,
+                                     LLVMPointerType(dbl_ty,0),
+                                     i64_ty };
+            LLVMTypeRef fty = LLVMFunctionType(dbl_ty, fparams, 3, /*isVarArg=*/0);
+            in_func = LLVMAddFunction(module, "in_list", fty);
+            LLVMSetLinkage(in_func, LLVMExternalLinkage);
+        }
+
+        // chama in_list(elem_val, data_ptr, len_val)
+        LLVMValueRef result = LLVMBuildCall2(
+            builder,
+            LLVMGetElementType(LLVMTypeOf(in_func)),
+            in_func,
+            (LLVMValueRef[]){ elem_val, data_ptr, len_val },
+            3,
+            "inres"
+        );
+
+        // armazena o resultado em $4
+        LLVMValueRef dest_p = find_or_create_variable((yyvsp[0].sval));
+        LLVMBuildStore(builder, result, dest_p);
+
         free((yyvsp[-2].sval)); free((yyvsp[-1].sval)); free((yyvsp[0].sval));
     }
-#line 1423 "parser.tab.c"
+#line 1848 "parserLLVM.tab.c"
     break;
 
-  case 50: /* value: NUMBER  */
-#line 225 "parser.y"
+  case 53: /* value: NUMBER  */
+#line 661 "parserLLVM.y"
            {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%f", (yyvsp[0].dval));
-        (yyval.sval) = copyString(buf);
+        (yyval.lval) = LLVMConstReal(LLVMDoubleTypeInContext(context), (yyvsp[0].dval));
     }
-#line 1433 "parser.tab.c"
+#line 1856 "parserLLVM.tab.c"
     break;
 
-  case 51: /* value: STRING  */
-#line 230 "parser.y"
-              { (yyval.sval) = (yyvsp[0].sval); }
-#line 1439 "parser.tab.c"
+  case 54: /* value: STRING  */
+#line 664 "parserLLVM.y"
+           {
+        (yyval.lval) = LLVMBuildGlobalStringPtr(builder, (yyvsp[0].sval), "str");
+        free((yyvsp[0].sval));
+    }
+#line 1865 "parserLLVM.tab.c"
     break;
 
-  case 52: /* value: IDENTIFIER  */
-#line 231 "parser.y"
-              { (yyval.sval) = (yyvsp[0].sval); }
-#line 1445 "parser.tab.c"
+  case 55: /* value: TRUE  */
+#line 668 "parserLLVM.y"
+                 { (yyval.lval) = LLVMConstReal(LLVMDoubleTypeInContext(context), 1.0); }
+#line 1871 "parserLLVM.tab.c"
+    break;
+
+  case 56: /* value: FALSE  */
+#line 669 "parserLLVM.y"
+                 { (yyval.lval) = LLVMConstReal(LLVMDoubleTypeInContext(context), 0.0); }
+#line 1877 "parserLLVM.tab.c"
+    break;
+
+  case 57: /* value: IDENTIFIER  */
+#line 670 "parserLLVM.y"
+               {
+      LLVMValueRef var = find_variable((yyvsp[0].sval));
+      if (!var) {
+          yyerror("Variável não definida");
+          /* para não quebrar o parser, cria provisoriamente
+             ou aponta para um dummy, conforme seu gosto */
+          var = find_or_create_variable((yyvsp[0].sval));
+      }
+      (yyval.lval) = LLVMBuildLoad2(builder,
+                          LLVMDoubleTypeInContext(context),
+                          var,
+                          "loadtmp");
+      free((yyvsp[0].sval));
+  }
+#line 1896 "parserLLVM.tab.c"
     break;
 
 
-#line 1449 "parser.tab.c"
+#line 1900 "parserLLVM.tab.c"
 
       default: break;
     }
@@ -1638,10 +2089,85 @@ yyreturnlab:
   return yyresult;
 }
 
-#line 234 "parser.y"
+#line 685 "parserLLVM.y"
+
+
+/* parserLLVM.y, no epílogo */
+void delete_list(double elem, double *data, long *len) {
+    /* encontra o índice da primeira ocorrência */
+    long i;
+    for (i = 0; i < *len; ++i) {
+        if (data[i] == elem) break;
+    }
+    /* se achou, desloca tudo para “fechar o buraco” */
+    if (i < *len) {
+        for (; i + 1 < *len; ++i) {
+            data[i] = data[i+1];
+        }
+        --*len;
+    }
+}
+
+
+double in_list(double elem, double *data, long len) {
+    for (long i = 0; i < len; ++i) {
+        if (data[i] == elem) return 1.0;
+    }
+    return 0.0;
+}
 
 
 int main(int argc, char **argv) {
+    /* Initialize LLVM */
+    LLVMInitializeNativeTarget();
+    LLVMInitializeNativeAsmPrinter();
+    context = LLVMContextCreate();
+    module = LLVMModuleCreateWithNameInContext("mengo", context);
+    builder = LLVMCreateBuilderInContext(context);
+
+    /* Create main function */
+    LLVMTypeRef main_type = LLVMFunctionType(LLVMVoidTypeInContext(context), NULL, 0, 0);
+    main_func = LLVMAddFunction(module, "main", main_type);
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(context, main_func, "entry");
+    LLVMPositionBuilderAtEnd(builder, entry);
+
+    /* Parse input */
     if (argc > 1) yyin = fopen(argv[1], "r");
-    return yyparse();
+    int result = yyparse();
+
+    /* Finish main function */
+    LLVMBuildRetVoid(builder);
+
+    /* Verify module */
+    char *error = NULL;
+    if (LLVMVerifyModule(module, LLVMReturnStatusAction, &error)) {
+        fprintf(stderr, "Module verification error: %s\n", error);
+        LLVMDisposeMessage(error);
+        return 1;
+    }
+
+    /* Write bitcode (for debugging) */
+    LLVMWriteBitcodeToFile(module, "mengo.bc");
+
+    /* Execute with JIT */
+    LLVMExecutionEngineRef engine;
+    if (LLVMCreateExecutionEngineForModule(&engine, module, &error)) {
+        fprintf(stderr, "Error creating execution engine: %s\n", error);
+        LLVMDisposeMessage(error);
+        return 1;
+    }
+    
+    LLVMLoadLibraryPermanently(NULL);
+
+    LLVMRunFunction(engine, main_func, 0, NULL);
+
+    /* Cleanup */
+    for (int i = 0; i < symbol_count; i++) {
+        free(symbol_table[i].name);
+    }
+    LLVMDisposeExecutionEngine(engine);
+    LLVMDisposeBuilder(builder);
+    LLVMContextDispose(context);
+
+    return result;
 }

@@ -86,3 +86,21 @@ character_except_newline = ? qualquer caractere exceto "\n" ? ;
 
 newline        = "\n" ;
 ```
+
+compiler: 
+```bash
+flex lexer.l
+bison -d parserLLVM.y
+gcc -rdynamic -o mengo parserLLVM.tab.c lex.yy.c     `llvm-config --cflags --ldflags --libs core`     -Wno-deprecated-declarations
+./<seu_programa>.fla
+```
+
+implementando true e false:
+
+brnoschsaloli@schnolisg15:/mnt/c/Users/brnos/OneDrive/Documentos/insper/7comp/logcomp/mengo$ ./mengo test.fla
+Error: Variável não definida at line 1
+0.000000
+
+verificar codigo do test.fla
+
+chat: definicao de label llvm

@@ -1,5 +1,2 @@
-set i 0
-set j 2
-add i j i
-print j
-print i
+set y true
+print y
