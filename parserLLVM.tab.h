@@ -88,7 +88,8 @@ extern int yydebug;
     NEWLINE = 289,                 /* NEWLINE  */
     TRUE = 290,                    /* TRUE  */
     FALSE = 291,                   /* FALSE  */
-    NUMBER = 292                   /* NUMBER  */
+    GET = 292,                     /* GET  */
+    NUMBER = 293                   /* NUMBER  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -97,13 +98,13 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 99 "parserLLVM.y"
+#line 103 "parserLLVM.y"
 
     double dval;
     char *sval;
     LLVMValueRef lval; /* For LLVM values */
 
-#line 107 "parserLLVM.tab.h"
+#line 108 "parserLLVM.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

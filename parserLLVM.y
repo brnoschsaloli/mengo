@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h> 
 #include <llvm-c/Core.h>
 #include <llvm-c/Support.h>
 #include <llvm-c/ExecutionEngine.h>
@@ -45,8 +46,11 @@ LLVMValueRef find_or_create_variable(const char *name) {
 }
 
 #define MAX_LABELS 100
-static LLVMBasicBlockRef if_then_bb;
-static LLVMBasicBlockRef if_merge_bb;
+#define MAX_IF_DEPTH 100
+static LLVMBasicBlockRef if_then_stack[MAX_IF_DEPTH];
+static LLVMBasicBlockRef if_merge_stack[MAX_IF_DEPTH];
+static bool then_terminated[MAX_IF_DEPTH];
+static int if_depth = 0;
 static int exit_cont = 0;
 static int cont_count = 0;
 static char*   label_names[MAX_LABELS];
@@ -108,9 +112,8 @@ extern FILE *yyin;
 %token <sval> IF EQUAL NOTEQUAL LESS GREATER LESSEQUAL GREATEREQUAL
 %token <sval> LABEL GOTO EXIT INPUT PRINT BIN LIST INSERT DELETE IN
 %token <sval> IDENTIFIER STRING COMMENT INDENT NEWLINE
-
-%token TRUE FALSE
-
+%token <dval> TRUE FALSE
+%token GET
 
 /* Numeric token */
 %token <dval> NUMBER
@@ -134,16 +137,17 @@ program:
   ;
 
 line:
-    if_stmt
-    | opt_indent statement NEWLINE
+    indent_list if_stmt
+  | indent_list simple_stmt NEWLINE
   ;
 
-opt_indent:
-    /* empty */
-  | INDENT
+
+indent_list:
+    /* vazio */
+  | indent_list INDENT
   ;
 
-statement:
+simple_stmt:
       assignment
     | math_operation
     | logical_operation
@@ -157,8 +161,10 @@ statement:
     | list_insert
     | list_delete
     | list_in_check
+    | get_command
     | COMMENT
   ;
+
 
 assignment:
     SET IDENTIFIER value {
@@ -220,50 +226,60 @@ logical_operation:
 
 if_stmt:
     IF IDENTIFIER comparator value NEWLINE
-    { 
-        // 1) carrega a variável e faz a comparação
+    {
+        /* 1) empilha novo nível */
+        int depth = if_depth++;
+        /* 2) cria blocos THEN e END */
+        if_then_stack[depth]  = LLVMAppendBasicBlockInContext(context, main_func, "if.then");
+        if_merge_stack[depth] = LLVMAppendBasicBlockInContext(context, main_func, "if.end");
+        /* 3) inicializa flag de terminador */
+        then_terminated[depth] = false;
+
+        /* 4) carrega a variável e faz a comparação */
         LLVMValueRef var = LLVMBuildLoad2(
             builder,
             LLVMDoubleTypeInContext(context),
             find_variable($2),
             "if.load"
         );
-        
         LLVMValueRef cmp;
-        if      (strcmp($3, "==")==0) cmp = LLVMBuildFCmp(builder, LLVMRealOEQ, var, $4, "if.cmp");
-        else if (strcmp($3, "!=")==0) cmp = LLVMBuildFCmp(builder, LLVMRealONE,var, $4, "if.cmp");
-        else if (strcmp($3, "<" )==0) cmp = LLVMBuildFCmp(builder, LLVMRealOLT,var, $4, "if.cmp");
-        else if (strcmp($3, ">" )==0) cmp = LLVMBuildFCmp(builder, LLVMRealOGT,var, $4, "if.cmp");
-        else if (strcmp($3, "<=")==0) cmp = LLVMBuildFCmp(builder, LLVMRealOLE,var, $4, "if.cmp");
-        else                           cmp = LLVMBuildFCmp(builder, LLVMRealOGE,var, $4, "if.cmp");
+        if      (strcmp($3, "==") == 0) cmp = LLVMBuildFCmp(builder, LLVMRealOEQ, var, $4, "if.cmp");
+        else if (strcmp($3, "!=") == 0) cmp = LLVMBuildFCmp(builder, LLVMRealONE, var, $4, "if.cmp");
+        else if (strcmp($3, "<" ) == 0) cmp = LLVMBuildFCmp(builder, LLVMRealOLT, var, $4, "if.cmp");
+        else if (strcmp($3, ">" ) == 0) cmp = LLVMBuildFCmp(builder, LLVMRealOGT, var, $4, "if.cmp");
+        else if (strcmp($3, "<=") == 0) cmp = LLVMBuildFCmp(builder, LLVMRealOLE, var, $4, "if.cmp");
+        else                            cmp = LLVMBuildFCmp(builder, LLVMRealOGE, var, $4, "if.cmp");
 
-        // 2) cria os blocos THEN e MERGE
-        if_then_bb  = LLVMAppendBasicBlockInContext(context, main_func, "if.then");
-        if_merge_bb = LLVMAppendBasicBlockInContext(context, main_func, "if.end");
+        /* 5) faz o branch condicional */
+        LLVMBuildCondBr(builder, cmp,
+                        if_then_stack[depth],
+                        if_merge_stack[depth]);
 
-        // 3) faz o branch condicional
-        LLVMBuildCondBr(builder, cmp, if_then_bb, if_merge_bb);
-
-        // 4) posiciona o builder no início do THEN
-        LLVMPositionBuilderAtEnd(builder, if_then_bb);
+        /* 6) posiciona o builder no início do THEN */
+        LLVMPositionBuilderAtEnd(builder, if_then_stack[depth]);
 
         free($2);
         free($3);
     }
     then_block
     {
-        // 6) ao sair do bloco indentado, fecha o THEN com um branch para o MERGE
-        LLVMBuildBr(builder, if_merge_bb);
-        // 7) reposiciona o builder no MERGE, para as instruções depois do if
-        LLVMPositionBuilderAtEnd(builder, if_merge_bb);
+        /* 7) ao sair do THEN, só emite merge se não houve goto/exit */
+        int depth = --if_depth;
+        if (!then_terminated[depth]) {
+            LLVMBuildBr(builder, if_merge_stack[depth]);
+            LLVMPositionBuilderAtEnd(builder, if_merge_stack[depth]);
+        }
+        /* caso contrário, já estamos no bloco de continuação apropriado */
     }
 ;
 
-then_block:
-    /* uma ou mais linhas com INDENT */
-    INDENT statement NEWLINE then_block
-  | /* vazio */
-;
+
+
+then_block
+  : /* vazio — if sem corpo */
+  | INDENT simple_stmt NEWLINE then_block
+  | INDENT if_stmt             then_block
+  ;
 
 comparator:
       EQUAL       { $$ = copyString("=="); }
@@ -294,28 +310,20 @@ label_def:
 
 
 goto_command:
-  GOTO IDENTIFIER {
-    LLVMBasicBlockRef target = findLabel($2);
-    if (!target) {
-      yyerror("Label não encontrada");
-    } else {
-      // 1) branch para o bloco-alvo
-      LLVMBuildBr(builder, target);
-
-      // 2) cria um bloco de continuação único
-      char cont_name[32];
-      sprintf(cont_name, "cont.%d", cont_count++);
-      LLVMBasicBlockRef cont_bb = LLVMAppendBasicBlockInContext(
-        context,
-        main_func,
-        cont_name
-      );
-
-      // 3) reposiciona o builder nesse bloco de continuação
-      LLVMPositionBuilderAtEnd(builder, cont_bb);
+    GOTO IDENTIFIER {
+        LLVMBasicBlockRef target = findLabel($2);
+        if (!target) {
+            yyerror("Label não encontrada");
+        } else {
+            /* 1) branch direto ao label */
+            LLVMBuildBr(builder, target);
+            /* 2) sinaliza que o THEN foi terminado */
+            then_terminated[if_depth-1] = true;
+            /* 3) reposiciona o builder no bloco de merge do if */
+            LLVMPositionBuilderAtEnd(builder, if_merge_stack[if_depth-1]);
+        }
+        free($2);
     }
-    free($2);
-  }
 ;
 
 
@@ -324,6 +332,7 @@ exit_command:
     EXIT {
         // 1) termina a função aqui
         LLVMBuildRetVoid(builder);
+        then_terminated[if_depth-1] = true;
 
         // 2) cria um bloco de continuação único, para qualquer código após o exit
         char cont_name[32];
@@ -395,23 +404,77 @@ input_command:
   ;
 
 print_command:
-    PRINT value {
-        LLVMValueRef printf_func = LLVMGetNamedFunction(module, "printf");
-        LLVMTypeRef printf_type;
-        if (!printf_func) {
-            LLVMTypeRef param_types[] = { LLVMPointerType(LLVMInt8TypeInContext(context), 0) };
-            printf_type = LLVMFunctionType(LLVMInt32TypeInContext(context), param_types, 1, 1);
-            printf_func = LLVMAddFunction(module, "printf", printf_type);
-            LLVMSetLinkage(printf_func, LLVMExternalLinkage);
+    PRINT STRING {
+        // 1) recupera/declara printf como antes
+        LLVMValueRef printf_fn = LLVMGetNamedFunction(module, "printf");
+        LLVMTypeRef printf_ty;
+        if (!printf_fn) {
+            LLVMTypeRef params[] = {
+                LLVMPointerType(LLVMInt8TypeInContext(context), 0)
+            };
+            printf_ty = LLVMFunctionType(
+                LLVMInt32TypeInContext(context),
+                params, 1, /*isVarArg=*/1
+            );
+            printf_fn = LLVMAddFunction(module, "printf", printf_ty);
+            LLVMSetLinkage(printf_fn, LLVMExternalLinkage);
         } else {
-            printf_type = LLVMGetElementType(LLVMTypeOf(printf_func));
+            printf_ty = LLVMGetElementType(LLVMTypeOf(printf_fn));
         }
-        char *format_str = "%f\n";
-        LLVMValueRef format = LLVMBuildGlobalStringPtr(builder, format_str, "format");
-        LLVMValueRef args[] = { format, $2 };
-        LLVMBuildCall2(builder, printf_type, printf_func, args, 2, "");
+
+        // 2) formato "%s\n"
+        LLVMValueRef fmt_str = LLVMBuildGlobalStringPtr(
+            builder, "%s\n", "fmt_str"
+        );
+        // 3) global string ptr para o literal $2
+        LLVMValueRef str_ptr = LLVMBuildGlobalStringPtr(
+            builder, $2, "str"
+        );
+        // 4) call printf(fmt_str, str_ptr)
+        LLVMBuildCall2(
+            builder,
+            printf_ty,
+            printf_fn,
+            (LLVMValueRef[]){ fmt_str, str_ptr },
+            2,
+            ""
+        );
+        free($2);
+    }
+  | PRINT value {
+        // mesmo código que você já tinha:
+        LLVMValueRef printf_fn = LLVMGetNamedFunction(module, "printf");
+        LLVMTypeRef printf_ty;
+        if (!printf_fn) {
+            LLVMTypeRef params[] = {
+                LLVMPointerType(LLVMInt8TypeInContext(context), 0)
+            };
+            printf_ty = LLVMFunctionType(
+                LLVMInt32TypeInContext(context),
+                params, 1, /*isVarArg=*/1
+            );
+            printf_fn = LLVMAddFunction(module, "printf", printf_ty);
+            LLVMSetLinkage(printf_fn, LLVMExternalLinkage);
+        } else {
+            printf_ty = LLVMGetElementType(LLVMTypeOf(printf_fn));
+        }
+
+        // formato "%f\n"
+        LLVMValueRef fmt_f = LLVMBuildGlobalStringPtr(
+            builder, "%f\n", "fmt_f"
+        );
+        // call printf(fmt_f, $2)
+        LLVMBuildCall2(
+            builder,
+            printf_ty,
+            printf_fn,
+            (LLVMValueRef[]){ fmt_f, $2 },
+            2,
+            ""
+        );
     }
   ;
+
 
 bin_command:
     BIN IDENTIFIER IDENTIFIER {
@@ -656,6 +719,46 @@ list_in_check:
     }
   ;
 
+get_command:
+    GET value IDENTIFIER IDENTIFIER {
+        // $2 = índice (LLVMValueRef, double)
+        // $3 = nome da lista (IDENTIFIER)
+        // $4 = variável destino (IDENTIFIER)
+
+        // monta nome do array global
+        char data_name[256];
+        snprintf(data_name, sizeof(data_name), "%s_data", $3);
+        LLVMValueRef data_g = LLVMGetNamedGlobal(module, data_name);
+        if (!data_g) {
+            yyerror("Lista não existe");
+        } else {
+            LLVMTypeRef dbl_ty = LLVMDoubleTypeInContext(context);
+            LLVMTypeRef i64_ty = LLVMInt64TypeInContext(context);
+
+            // converte índice de double para i64
+            LLVMValueRef idx_d = $2;
+            LLVMValueRef idx_i = LLVMBuildFPToSI(builder, idx_d, i64_ty, "idx");
+
+            // calcula &data[idx]
+            LLVMValueRef zero = LLVMConstInt(i64_ty, 0, 0);
+            LLVMValueRef gep = LLVMBuildInBoundsGEP(
+                builder,
+                data_g,
+                (LLVMValueRef[]){ zero, idx_i },
+                2,
+                "elem_ptr"
+            );
+
+            // carrega o valor e armazena em dest
+            LLVMValueRef elem = LLVMBuildLoad2(builder, dbl_ty, gep, "getval");
+            LLVMBuildStore(builder, elem, find_or_create_variable($4));
+        }
+
+        free($3);
+        free($4);
+    }
+;
+
 
 value:
     NUMBER {
@@ -726,17 +829,21 @@ int main(int argc, char **argv) {
     /* Parse input */
     if (argc > 1) yyin = fopen(argv[1], "r");
     int result = yyparse();
+    if (result != 0) {
+        fprintf(stderr, "Parse failed, aborting LLVM emission.\n");
+        return result;
+    }
 
-    /* Finish main function */
+    // só daqui pra baixo se parse OK
     LLVMBuildRetVoid(builder);
 
-    /* Verify module */
     char *error = NULL;
     if (LLVMVerifyModule(module, LLVMReturnStatusAction, &error)) {
         fprintf(stderr, "Module verification error: %s\n", error);
         LLVMDisposeMessage(error);
         return 1;
     }
+
 
     /* Write bitcode (for debugging) */
     LLVMWriteBitcodeToFile(module, "mengo.bc");

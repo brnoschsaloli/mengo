@@ -1,5 +1,7 @@
 %{
-#include "parser.tab.h"
+#include <llvm-c/Core.h>
+#include <llvm-c/Support.h>
+#include "parserLLVM.tab.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,9 +56,11 @@ static char *copyString(const char *s) {
 "insert"                { return INSERT; }
 "delete"                { return DELETE; }
 "in"                    { return IN; }
+"get"                   { return GET; }
 
-"true"                  { return TRUE; }
-"false"                 { return FALSE; }
+"true"    { yylval.dval = 1.0;  return TRUE; }
+"false"   { yylval.dval = 0.0;  return FALSE; }
+
 
 [-]?[0-9]+(\.[0-9]+)?    { yylval.dval = atof(yytext); return NUMBER; }
 \"([^\"\n])*\"          { yylval.sval = copyString(yytext); return STRING; }

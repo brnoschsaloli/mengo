@@ -89,10 +89,11 @@ newline        = "\n" ;
 
 compiler: 
 ```bash
+wsl
 flex lexer.l
 bison -d parserLLVM.y
-gcc -rdynamic -o mengo parserLLVM.tab.c lex.yy.c     `llvm-config --cflags --ldflags --libs core`     -Wno-deprecated-declarations
-./<seu_programa>.fla
+gcc -rdynamic -o mengo parserLLVM.tab.c lex.yy.c `llvm-config --cflags --ldflags --libs core` -Wno-deprecated-declarations
+./mengo <seu_programa>.fla
 ```
 
 implementando true e false:

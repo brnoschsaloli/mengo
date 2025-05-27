@@ -10,14 +10,13 @@ if i less n
 set j 0
 label verificar_lista
 if j less n
-    in j numeros atual
-    mod atual 2 resto
-    if resto equal 0
-        print "Número par:"
-        print atual
-    if resto notequal 0
-        print "Número ímpar:"
-        print atual
+    get j numeros atual
+    print atual
+    mod resto atual 2
     add j 1 j
+    if resto equal 0
+        print "par"
+    if resto equal 0
+        print "impar"
     goto verificar_lista
 exit
