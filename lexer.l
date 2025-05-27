@@ -44,8 +44,6 @@ static char *copyString(const char *s) {
 "lessequal"             { return LESSEQUAL; }
 "greaterequal"          { return GREATEREQUAL; }
 
-"label"                 { return LABEL; }
-"goto"                  { return GOTO; }
 "exit"                  { return EXIT; }
 
 "input"                 { return INPUT; }
@@ -57,7 +55,7 @@ static char *copyString(const char *s) {
 "delete"                { return DELETE; }
 "in"                    { return IN; }
 "get"                   { return GET; }
-
+"while"                { return WHILE; }
 "true"    { yylval.dval = 1.0;  return TRUE; }
 "false"   { yylval.dval = 0.0;  return FALSE; }
 

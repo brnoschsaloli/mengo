@@ -1,0 +1,9 @@
+input x
+while x less 10
+    mod resto x 2
+    print x
+    add x 1 x
+    if resto equal 0
+        print "par"
+    
+exit

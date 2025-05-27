@@ -1,0 +1,10 @@
+set x 10
+if x equal 10
+    print "x é dez"
+    if x less 12
+        print "x eh menor que 12"
+    if x greater 15
+        print "x também é maior que 15"
+    if x less 12
+        print "x eh menor que 12.2"
+exit

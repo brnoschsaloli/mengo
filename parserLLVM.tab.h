@@ -71,25 +71,24 @@ extern int yydebug;
     GREATER = 272,                 /* GREATER  */
     LESSEQUAL = 273,               /* LESSEQUAL  */
     GREATEREQUAL = 274,            /* GREATEREQUAL  */
-    LABEL = 275,                   /* LABEL  */
-    GOTO = 276,                    /* GOTO  */
-    EXIT = 277,                    /* EXIT  */
-    INPUT = 278,                   /* INPUT  */
-    PRINT = 279,                   /* PRINT  */
-    BIN = 280,                     /* BIN  */
-    LIST = 281,                    /* LIST  */
-    INSERT = 282,                  /* INSERT  */
-    DELETE = 283,                  /* DELETE  */
-    IN = 284,                      /* IN  */
-    IDENTIFIER = 285,              /* IDENTIFIER  */
-    STRING = 286,                  /* STRING  */
-    COMMENT = 287,                 /* COMMENT  */
-    INDENT = 288,                  /* INDENT  */
-    NEWLINE = 289,                 /* NEWLINE  */
-    TRUE = 290,                    /* TRUE  */
-    FALSE = 291,                   /* FALSE  */
-    GET = 292,                     /* GET  */
-    NUMBER = 293                   /* NUMBER  */
+    EXIT = 275,                    /* EXIT  */
+    INPUT = 276,                   /* INPUT  */
+    PRINT = 277,                   /* PRINT  */
+    BIN = 278,                     /* BIN  */
+    LIST = 279,                    /* LIST  */
+    INSERT = 280,                  /* INSERT  */
+    DELETE = 281,                  /* DELETE  */
+    IN = 282,                      /* IN  */
+    IDENTIFIER = 283,              /* IDENTIFIER  */
+    STRING = 284,                  /* STRING  */
+    COMMENT = 285,                 /* COMMENT  */
+    INDENT = 286,                  /* INDENT  */
+    NEWLINE = 287,                 /* NEWLINE  */
+    TRUE = 288,                    /* TRUE  */
+    FALSE = 289,                   /* FALSE  */
+    GET = 290,                     /* GET  */
+    WHILE = 291,                   /* WHILE  */
+    NUMBER = 292                   /* NUMBER  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -98,13 +97,13 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 103 "parserLLVM.y"
+#line 97 "parserLLVM.y"
 
     double dval;
     char *sval;
     LLVMValueRef lval; /* For LLVM values */
 
-#line 108 "parserLLVM.tab.h"
+#line 107 "parserLLVM.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

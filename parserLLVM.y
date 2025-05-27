@@ -51,6 +51,11 @@ static LLVMBasicBlockRef if_then_stack[MAX_IF_DEPTH];
 static LLVMBasicBlockRef if_merge_stack[MAX_IF_DEPTH];
 static bool then_terminated[MAX_IF_DEPTH];
 static int if_depth = 0;
+#define MAX_WHILE_DEPTH 100
+static LLVMBasicBlockRef while_cond_stack[MAX_WHILE_DEPTH];
+static LLVMBasicBlockRef while_body_stack[MAX_WHILE_DEPTH];
+static LLVMBasicBlockRef while_end_stack [MAX_WHILE_DEPTH];
+static int              while_depth     = 0;
 static int exit_cont = 0;
 static int cont_count = 0;
 static char*   label_names[MAX_LABELS];
@@ -71,18 +76,7 @@ LLVMValueRef find_variable(const char *name) {
     return NULL;
 }
 
-void registerLabel(const char *name, LLVMBasicBlockRef bb) {
-    label_names[label_count] = strdup(name);
-    label_blocks[label_count] = bb;
-    label_count++;
-}
 
-LLVMBasicBlockRef findLabel(const char *name) {
-    for (int i = 0; i < label_count; i++)
-        if (strcmp(label_names[i], name) == 0)
-            return label_blocks[i];
-    return NULL;
-}
 
 /* Error handling */
 void yyerror(const char *s) {
@@ -110,10 +104,10 @@ extern FILE *yyin;
 %token <sval> SET ADD SUB MUL DIV POW MOD
 %token <sval> AND OR NOT
 %token <sval> IF EQUAL NOTEQUAL LESS GREATER LESSEQUAL GREATEREQUAL
-%token <sval> LABEL GOTO EXIT INPUT PRINT BIN LIST INSERT DELETE IN
+%token <sval> EXIT INPUT PRINT BIN LIST INSERT DELETE IN
 %token <sval> IDENTIFIER STRING COMMENT INDENT NEWLINE
 %token <dval> TRUE FALSE
-%token GET
+%token GET WHILE
 
 /* Numeric token */
 %token <dval> NUMBER
@@ -138,7 +132,8 @@ program:
 
 line:
     indent_list if_stmt
-  | indent_list simple_stmt NEWLINE
+    | indent_list while_stmt
+    | indent_list simple_stmt NEWLINE
   ;
 
 
@@ -151,8 +146,6 @@ simple_stmt:
       assignment
     | math_operation
     | logical_operation
-    | label_def
-    | goto_command
     | exit_command
     | input_command
     | print_command
@@ -163,6 +156,7 @@ simple_stmt:
     | list_in_check
     | get_command
     | COMMENT
+    | while_stmt
   ;
 
 
@@ -196,10 +190,6 @@ math_operation:
     }
   | POW IDENTIFIER value value {
         printf("Math op pow: %s (not implemented)\n", $2);
-        free($2);
-    }
-  | MOD IDENTIFIER value {
-        printf("Math op mod: %s (not implemented)\n", $2);
         free($2);
     }
   | MOD IDENTIFIER value value {
@@ -273,6 +263,61 @@ if_stmt:
     }
 ;
 
+while_stmt:
+    WHILE IDENTIFIER comparator value NEWLINE
+    {
+        // 1) empilha nível de while
+        int depth = while_depth++;
+        // 2) cria blocos: condição, corpo e fim
+        LLVMBasicBlockRef cond_bb = LLVMAppendBasicBlockInContext(
+            context, main_func, "while.cond");
+        LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(
+            context, main_func, "while.body");
+        LLVMBasicBlockRef end_bb  = LLVMAppendBasicBlockInContext(
+            context, main_func, "while.end");
+        while_cond_stack[depth] = cond_bb;
+        while_body_stack[depth] = body_bb;
+        while_end_stack[depth]  = end_bb;
+
+        // 3) branch incondicional para o teste
+        LLVMBuildBr(builder, cond_bb);
+
+        // 4) posiciona no teste
+        LLVMPositionBuilderAtEnd(builder, cond_bb);
+        LLVMValueRef var = LLVMBuildLoad2(
+            builder,
+            LLVMDoubleTypeInContext(context),
+            find_variable($2),
+            "while.load"
+        );
+        LLVMValueRef cmp;
+        if      (strcmp($3,"==")==0) cmp = LLVMBuildFCmp(builder, LLVMRealOEQ, var, $4, "while.cmp");
+        else if (strcmp($3,"!=")==0) cmp = LLVMBuildFCmp(builder, LLVMRealONE,var, $4, "while.cmp");
+        else if (strcmp($3,"<" )==0) cmp = LLVMBuildFCmp(builder, LLVMRealOLT, var, $4, "while.cmp");
+        else if (strcmp($3,">" )==0) cmp = LLVMBuildFCmp(builder, LLVMRealOGT, var, $4, "while.cmp");
+        else if (strcmp($3,"<=")==0) cmp = LLVMBuildFCmp(builder, LLVMRealOLE, var, $4, "while.cmp");
+        else                          cmp = LLVMBuildFCmp(builder, LLVMRealOGE, var, $4, "while.cmp");
+
+        // 5) branch condicional para corpo ou fim
+        LLVMBuildCondBr(builder, cmp, body_bb, end_bb);
+
+        // 6) entra no corpo do loop
+        LLVMPositionBuilderAtEnd(builder, body_bb);
+
+        free($2);
+        free($3);
+    }
+    then_block   /* usa o mesmo then_block pra corpo indentado */
+    {
+        // 7) ao fim do corpo, volta para o teste
+        int depth = --while_depth;
+        LLVMBuildBr(builder, while_cond_stack[depth]);
+        // 8) posiciona no bloco de saída do loop
+        LLVMPositionBuilderAtEnd(builder, while_end_stack[depth]);
+    }
+;
+
+
 
 
 then_block
@@ -290,41 +335,6 @@ comparator:
     | GREATEREQUAL{ $$ = copyString(">="); }
   ;
 
-label_def:
-    LABEL IDENTIFIER {
-        LLVMBasicBlockRef bb = LLVMAppendBasicBlockInContext(
-            context,
-            main_func,
-            $2
-        );
-        // Registra no mapa
-        registerLabel($2, bb);
-        // Fecha o bloco anterior com um branch
-        LLVMBuildBr(builder, bb);
-        // Move o builder para o rótulo
-        LLVMPositionBuilderAtEnd(builder, bb);
-        free($2);
-    }
-  ;
-
-
-
-goto_command:
-    GOTO IDENTIFIER {
-        LLVMBasicBlockRef target = findLabel($2);
-        if (!target) {
-            yyerror("Label não encontrada");
-        } else {
-            /* 1) branch direto ao label */
-            LLVMBuildBr(builder, target);
-            /* 2) sinaliza que o THEN foi terminado */
-            then_terminated[if_depth-1] = true;
-            /* 3) reposiciona o builder no bloco de merge do if */
-            LLVMPositionBuilderAtEnd(builder, if_merge_stack[if_depth-1]);
-        }
-        free($2);
-    }
-;
 
 
 

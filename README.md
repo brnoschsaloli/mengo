@@ -1,4 +1,4 @@
-# Mengo Programing Language
+# Mengo Programming Language
 
 ```ebnf
 program        = { line } ;
@@ -13,8 +13,7 @@ command        = assignment
                | math_operation
                | logical_operation
                | condition
-               | label_def
-               | goto_command
+               | while_loop
                | exit_command
                | input_command
                | print_command
@@ -29,10 +28,7 @@ assignment     = "set" identifier value ;
 math_operation = add_sub_mul_div_pow
                | mod_operation ;
 
-add_sub_mul_div_pow = ("add" | "sub" | "mul" | "div" | "pow") identifier value value ;
-
-mod_operation = "mod" identifier ( value value | value ) ;
-
+add_sub_mul_div_pow = ("add" | "sub" | "mul" | "div" | "mod") identifier value value ;
 
 logical_operation = ("and" | "or") identifier value value
                   | "not" identifier value ;
@@ -41,16 +37,14 @@ condition      = "if" comparison ;
 
 comparison     = identifier comparator value ;
 
-comparator     = "equal" 
-               | "notequal" 
-               | "less" 
-               | "greater" 
-               | "lessequal" 
+comparator     = "equal"
+               | "notequal"
+               | "less"
+               | "greater"
+               | "lessequal"
                | "greaterequal" ;
 
-label_def      = "label" identifier ;
-
-goto_command   = "goto" identifier ;
+while_loop     = "while" comparison ;
 
 exit_command   = "exit" ;
 
@@ -67,6 +61,8 @@ list_insert    = "insert" identifier identifier ;
 list_delete    = "delete" identifier identifier ;
 
 list_in_check  = "in" identifier identifier identifier ;
+
+get_command    = "get" value identifier identifier ;
 
 identifier     = letter { letter | digit | "_" } ;
 
@@ -87,7 +83,36 @@ character_except_newline = ? qualquer caractere exceto "\n" ? ;
 newline        = "\n" ;
 ```
 
-compiler: 
+## Exemplo de uso
+
+```fla
+input n
+list numeros
+set i 0
+while i less n
+    input temp
+    insert temp numeros
+    add i 1 i
+
+set j 0
+set soma 0
+while j less n
+    get j numeros atual
+    print atual
+    add soma atual soma
+    add j 1 j
+print "soma: "
+print soma
+if soma less 10
+    print "soma menor que 10"
+if soma greaterequal 10
+    print "soma maior ou igual a 10"
+exit
+
+```
+
+## Compilação
+
 ```bash
 wsl
 flex lexer.l
@@ -95,13 +120,3 @@ bison -d parserLLVM.y
 gcc -rdynamic -o mengo parserLLVM.tab.c lex.yy.c `llvm-config --cflags --ldflags --libs core` -Wno-deprecated-declarations
 ./mengo <seu_programa>.fla
 ```
-
-implementando true e false:
-
-brnoschsaloli@schnolisg15:/mnt/c/Users/brnos/OneDrive/Documentos/insper/7comp/logcomp/mengo$ ./mengo test.fla
-Error: Variável não definida at line 1
-0.000000
-
-verificar codigo do test.fla
-
-chat: definicao de label llvm

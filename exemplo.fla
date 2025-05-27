@@ -1,22 +1,22 @@
 input n
 list numeros
 set i 0
-label ler_numeros
-if i less n
+while i less n
     input temp
     insert temp numeros
     add i 1 i
-    goto ler_numeros
+
 set j 0
-label verificar_lista
-if j less n
+set soma 0
+while j less n
     get j numeros atual
     print atual
-    mod resto atual 2
+    add soma atual soma
     add j 1 j
-    if resto equal 0
-        print "par"
-    if resto equal 0
-        print "impar"
-    goto verificar_lista
+print "soma: "
+print soma
+if soma less 10
+    print "soma menor que 10"
+if soma greaterequal 10
+    print "soma maior ou igual a 10"
 exit
