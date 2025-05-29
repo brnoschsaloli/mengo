@@ -29,7 +29,6 @@ static char *copyString(const char *s) {
 "sub"                   { return SUB; }
 "mul"                   { return MUL; }
 "div"                   { return DIV; }
-"pow"                   { return POW; }
 "mod"                   { return MOD; }
 
 "and"                   { return AND; }
@@ -49,7 +48,6 @@ static char *copyString(const char *s) {
 "input"                 { return INPUT; }
 "print"                 { return PRINT; }
 
-"bin"                   { return BIN; }
 "list"                  { return LIST; }
 "insert"                { return INSERT; }
 "delete"                { return DELETE; }
@@ -61,8 +59,8 @@ static char *copyString(const char *s) {
 
 
 [-]?[0-9]+(\.[0-9]+)?    { yylval.dval = atof(yytext); return NUMBER; }
-\"([^\"\n])*\"          { yylval.sval = copyString(yytext); return STRING; }
-[a-zA-Z_][a-zA-Z0-9_]*   { yylval.sval = copyString(yytext); return IDENTIFIER; }
+\'([^\'\n])*\'          { yylval.sval = copyString(yytext); return STRING; }
+[a-zA-Z][a-zA-Z0-9]*   { yylval.sval = copyString(yytext); return IDENTIFIER; }
 
 .                       { printf("Unexpected character: %s\n", yytext); }
 

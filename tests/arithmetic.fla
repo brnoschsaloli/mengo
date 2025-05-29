@@ -1,0 +1,24 @@
+` Test file for arithmetic operations
+set a 10
+set b 5
+` Addition
+print '10 + 5'
+add c a b
+print c
+` Subtraction
+print '10 - 5'
+sub d a b
+print d
+` Multiplication
+print '10 * 5'
+mul e a b
+print e
+` Division
+print '10 / 5'
+div f a b
+print f
+` Modulo
+print '10 % 5'
+mod g a b
+print g
+exit 

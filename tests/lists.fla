@@ -1,0 +1,36 @@
+` Test file for list operations
+list mylist
+` Insert elements
+print 'insert elements 1, 2, 3'
+set t 1
+while t less 4
+    insert t mylist
+    add t 1 t
+` Print list elements
+print 'printing elements: '
+set i 0
+while i less 3
+    get i mylist element
+    print element
+    add i 1 i
+` Check if element is in list
+set temp 2
+print 'checking if 2 is in list:'
+in temp mylist result
+print result
+set temp 5
+print 'checking if 5 is in list:'
+in temp mylist result
+print result
+` Delete element
+print 'deleting 2 from the list'
+set temp 2
+delete temp mylist
+` Print list after deletion
+set i 0
+print 'printing list after removal'
+while i less 2
+    get i mylist element
+    print element
+    add i 1 i
+exit 

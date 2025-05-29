@@ -101,10 +101,10 @@ extern FILE *yyin;
 }
 
 /* Tokens with string values */
-%token <sval> SET ADD SUB MUL DIV POW MOD
+%token <sval> SET ADD SUB MUL DIV MOD
 %token <sval> AND OR NOT
 %token <sval> IF EQUAL NOTEQUAL LESS GREATER LESSEQUAL GREATEREQUAL
-%token <sval> EXIT INPUT PRINT BIN LIST INSERT DELETE IN
+%token <sval> EXIT INPUT PRINT LIST INSERT DELETE IN
 %token <sval> IDENTIFIER STRING COMMENT INDENT NEWLINE
 %token <dval> TRUE FALSE
 %token GET WHILE
@@ -149,7 +149,6 @@ simple_stmt:
     | exit_command
     | input_command
     | print_command
-    | bin_command
     | list_command
     | list_insert
     | list_delete
@@ -199,20 +198,52 @@ math_operation:
     }
   ;
 
+/* permite operandos numéricos ou variáveis (value) */
 logical_operation:
-    AND IDENTIFIER IDENTIFIER IDENTIFIER {
-        printf("Logical and: %s %s %s (not implemented)\n", $2, $3, $4);
-        free($2); free($3); free($4);
+    /* AND dest, op1, op2 */
+    AND IDENTIFIER value value {
+        LLVMTypeRef dbl    = LLVMDoubleTypeInContext(context);
+        LLVMValueRef zero  = LLVMConstReal(dbl, 0.0);
+        /* $3 e $4 já são LLVMValueRef (const real ou load de variável) */
+        LLVMValueRef lhs   = $3;
+        LLVMValueRef rhs   = $4;
+        /* compara com zero → booleano (i1) */
+        LLVMValueRef lhs_bool = LLVMBuildFCmp(builder, LLVMRealONE, lhs, zero, "lhs.bool");
+        LLVMValueRef rhs_bool = LLVMBuildFCmp(builder, LLVMRealONE, rhs, zero, "rhs.bool");
+        /* AND sobre i1 */
+        LLVMValueRef and_i1 = LLVMBuildAnd(builder, lhs_bool, rhs_bool, "and.tmp");
+        /* converte i1 → double */
+        LLVMValueRef and_fp = LLVMBuildUIToFP(builder, and_i1, dbl, "and.fp");
+        /* armazena em dest */
+        LLVMBuildStore(builder, and_fp, find_or_create_variable($2));
+        free($2);
     }
-  | OR IDENTIFIER IDENTIFIER IDENTIFIER {
-        printf("Logical or: %s %s %s (not implemented)\n", $2, $3, $4);
-        free($2); free($3); free($4);
+  | /* OR dest, op1, op2 */
+    OR IDENTIFIER value value {
+        LLVMTypeRef dbl   = LLVMDoubleTypeInContext(context);
+        LLVMValueRef zero = LLVMConstReal(dbl, 0.0);
+        LLVMValueRef lhs  = $3;
+        LLVMValueRef rhs  = $4;
+        LLVMValueRef lhs_bool = LLVMBuildFCmp(builder, LLVMRealONE, lhs, zero, "lhs.bool");
+        LLVMValueRef rhs_bool = LLVMBuildFCmp(builder, LLVMRealONE, rhs, zero, "rhs.bool");
+        LLVMValueRef or_i1   = LLVMBuildOr(builder, lhs_bool, rhs_bool, "or.tmp");
+        LLVMValueRef or_fp   = LLVMBuildUIToFP(builder, or_i1, dbl, "or.fp");
+        LLVMBuildStore(builder, or_fp, find_or_create_variable($2));
+        free($2);
     }
-  | NOT IDENTIFIER IDENTIFIER {
-        printf("Logical not: %s %s (not implemented)\n", $2, $3);
-        free($2); free($3);
+  | /* NOT dest, op */
+    NOT IDENTIFIER value {
+        LLVMTypeRef dbl   = LLVMDoubleTypeInContext(context);
+        LLVMValueRef zero = LLVMConstReal(dbl, 0.0);
+        LLVMValueRef op   = $3;
+        LLVMValueRef op_bool = LLVMBuildFCmp(builder, LLVMRealONE, op, zero, "op.bool");
+        LLVMValueRef not_i1  = LLVMBuildNot(builder, op_bool, "not.tmp");
+        LLVMValueRef not_fp  = LLVMBuildUIToFP(builder, not_i1, dbl, "not.fp");
+        LLVMBuildStore(builder, not_fp, find_or_create_variable($2));
+        free($2);
     }
   ;
+
 
 if_stmt:
     IF IDENTIFIER comparator value NEWLINE
@@ -486,13 +517,6 @@ print_command:
   ;
 
 
-bin_command:
-    BIN IDENTIFIER IDENTIFIER {
-        printf("Bin: %s to %s (not implemented)\n", $2, $3);
-        free($2); free($3);
-    }
-  ;
-
 /* LIST: cria vetor estático e variável de comprimento */
 list_command:
     LIST IDENTIFIER {
@@ -501,11 +525,11 @@ list_command:
         snprintf(data_name, sizeof(data_name), "%s_data", $2);
         snprintf(len_name,  sizeof(len_name),  "%s_len",  $2);
 
-        // 1) Se ainda não existir, cria o array [1024 x double]
+        // 1) Se ainda não existir, cria o array [1981 x double]
         if (!LLVMGetNamedGlobal(module, data_name)) {
             LLVMTypeRef elem_ty  = LLVMDoubleTypeInContext(context);
-            // vetor de tamanho fixo 1024
-            LLVMTypeRef array_ty = LLVMArrayType(elem_ty, 1024);
+            // vetor de tamanho fixo 1981
+            LLVMTypeRef array_ty = LLVMArrayType(elem_ty, 1981);
             LLVMValueRef data_g  = LLVMAddGlobal(module, array_ty, data_name);
             // inicializa tudo a zero
             LLVMSetInitializer(data_g, LLVMConstNull(array_ty));

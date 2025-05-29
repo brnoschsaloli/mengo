@@ -1,0 +1,26 @@
+` Test file for logical operations
+set a 1
+set b 0
+print 'set a = 1, b = 0'
+` AND operation
+print 'a AND a'
+and c a a
+print c
+print 'a AND b'
+and d a b
+print d
+` OR operation
+print 'a OR b'
+or e a b
+print e
+print 'b OR b'
+or f b b
+print f
+` NOT operation
+print 'NOT a'
+not g a
+print g
+print 'NOT b'
+not h b
+print h
+exit 

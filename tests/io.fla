@@ -1,0 +1,5 @@
+` Test file for input/output operations
+input num
+print 'You entered: '
+print num
+exit 

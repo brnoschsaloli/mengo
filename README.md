@@ -17,7 +17,6 @@ command        = assignment
                | exit_command
                | input_command
                | print_command
-               | bin_command
                | list_command
                | list_insert
                | list_delete
@@ -25,10 +24,10 @@ command        = assignment
 
 assignment     = "set" identifier value ;
 
-math_operation = add_sub_mul_div_pow
+math_operation = add_sub_mul_div_mod
                | mod_operation ;
 
-add_sub_mul_div_pow = ("add" | "sub" | "mul" | "div" | "mod") identifier value value ;
+add_sub_mul_div_mod = ("add" | "sub" | "mul" | "div" | "mod") identifier value value ;
 
 logical_operation = ("and" | "or") identifier value value
                   | "not" identifier value ;
@@ -52,8 +51,6 @@ input_command  = "input" identifier ;
 
 print_command  = "print" value ;
 
-bin_command    = "bin" identifier identifier ;
-
 list_command   = "list" identifier ;
 
 list_insert    = "insert" identifier identifier ;
@@ -64,13 +61,13 @@ list_in_check  = "in" identifier identifier identifier ;
 
 get_command    = "get" value identifier identifier ;
 
-identifier     = letter { letter | digit | "_" } ;
+identifier     = letter { letter | digit } ;
 
 value          = number | string | identifier ;
 
 number         = ["-"] digit { digit } ;
 
-string         = '"' { character } '"' ;
+string         = "'" { character } "'" ;
 
 letter         = "A".."Z" | "a".."z" ;
 
@@ -111,11 +108,35 @@ exit
 
 ```
 
+## Rodando os Testes
+
+O projeto inclui uma suíte de testes que verifica todas as funcionalidades da linguagem. Para rodar os testes:
+
+1. Certifique-se de que o compilador está compilado (veja seção "Compilação")
+2. Entre no diretório de testes:
+```bash
+cd tests
+```
+
+3. Execute o script de testes:
+```bash
+./run_tests.sh
+```
+
+Os testes incluem:
+- Operações aritméticas (arithmetic.fla)
+- Operações lógicas (logical.fla)
+- Controle de fluxo (control_flow.fla)
+- Operações com listas (lists.fla)
+- Entrada/Saída (io.fla)
+
+Cada arquivo de teste demonstra diferentes aspectos da linguagem e inclui comentários explicativos sobre o que está sendo testado.
+
 ## Compilação
 
 ```bash
-wsl
-flex lexer.l
+wsl (caso esteja rodando no windows)
+flex compiler/lexer.l
 bison -d parserLLVM.y
 gcc -rdynamic -o mengo parserLLVM.tab.c lex.yy.c `llvm-config --cflags --ldflags --libs core` -Wno-deprecated-declarations
 ./mengo <seu_programa>.fla
